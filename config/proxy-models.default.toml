@@ -1,0 +1,52 @@
+# proxy-models.toml — drives use-ollama-via-proxy.sh routing + proxy.js per-request
+# auto-rewrite of the `model` field.
+#
+# text_model  : default model Codex runs (good orchestrator, no vision needed).
+# image_model : model the proxy rewrites the request to when a message contains
+#               an input_image content block. Must be vision-capable in the catalog
+#               (ollama-launch-models.json input_modalities includes "image").
+#
+# Both slugs must exist in ollama-launch-models.json and be available on the
+# upstream Ollama server (127.0.0.1:11434).
+
+text_model  = "glm-5.2:cloud"
+image_model = "kimi-k2.7-code:cloud"
+
+# When true, the shape proxy inspects each /v1/responses request for an
+# input_image block and rewrites body.model to image_model before forwarding.
+# When false, the proxy passes model through unchanged (manual switching only).
+auto_route_image = true
+
+# When true, proxy.js logs full tool definitions and model/tool call items to
+# proxy.log. Useful for debugging Ollama shape translation. May include prompts,
+# tool arguments, shell commands, search queries, and patch contents.
+verbose_tools = false
+
+# When true, proxy.js writes the exact translated /v1/responses JSON body sent
+# to upstream Ollama into upstream-bodies.jsonl. This can include prompts, tool
+# arguments, file paths, and other sensitive context; keep it on only while
+# debugging.
+log_upstream_body = false
+
+# When true, the shape proxy injects a synthetic `find_skill` function tool into
+# every /v1/responses request and self-fulfills it locally: the model can call
+# find_skill{query} to locate enabled Codex skills (plugin + non-plugin) by
+# skill name, plugin name, and description (plugin-name matches rank highest),
+# and gets back the top 5 (configurable via the `limit` arg) matching SKILL.md
+# paths. web_search is not affected by this flag.
+#
+# Trade-off: while enabled, the proxy fulfills find_skill calls itself, so
+# /v1/responses turns are completed by the proxy (non-streaming) before being
+# returned to the app-server, mirroring how the web_search path already works.
+# Set to false to restore the normal streaming passthrough when you do not need
+# skill lookup. Can also be forced via env: PROXY_FIND_SKILL=1 / =0.
+enable_find_skill = true
+
+# When true, streamed /v1/responses turns are piped to the Codex app live
+# (text / reasoning / tool calls appear as they're generated) instead of being
+# buffered and flushed all at once. web_search / find_skill calls are still
+# self-fulfilled by the proxy, but they are re-emitted to the app as completed
+# call + output items so they show up in the UI while the proxy works, instead
+# of the UI going silent ("feeling stuck"). Set to false to restore the old
+# collapse-to-final-response behavior. Env: PROXY_STREAM_LOOP=1 / =0.
+stream_proxy_loop = true

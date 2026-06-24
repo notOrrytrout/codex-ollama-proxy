@@ -1,0 +1,38 @@
+{
+  "name": "codex-ollama-proxy",
+  "version": "0.1.0",
+  "description": "Unofficial local compatibility proxy for testing Ollama-compatible Responses API shapes with Codex config.",
+  "author": "bharat2808 <vermabharat642@gmail.com>",
+  "license": "MIT",
+  "homepage": "https://github.com/bharat2808/codex-ollama-proxy#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bharat2808/codex-ollama-proxy.git"
+  },
+  "bugs": {
+    "url": "https://github.com/bharat2808/codex-ollama-proxy/issues"
+  },
+  "bin": {
+    "codex-ollama-proxy": "bin/codex-ollama-proxy"
+  },
+  "files": [
+    "bin/",
+    "config/",
+    "scripts/",
+    "skills/",
+    "src/",
+    "model_config.js",
+    "proxy.js",
+    "use-ollama-via-proxy.sh",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "check": "node --check src/cli.js && node --check src/proxy.js && node --check src/codex-config.js",
+    "smoke": "scripts/smoke-test.sh"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
