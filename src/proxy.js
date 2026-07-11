@@ -349,14 +349,15 @@ function collectCustomToolInfo(tools) {
   return { customNames };
 }
 
-// Detect whether any input message carries an image content block.
-// Handles both the Responses-API shape (content: [{type:'input_image',...}])
-// and a plain string content (no image possible there).
+// Detect whether any input message carries actual image content.
+// A historical view_image function_call is not enough by itself: after the app
+// executes view_image, the follow-up turn may only need to summarize or return
+// the generated image path. Routing those turns to the vision model has caused
+// the stream to hang, so only route when image content is present.
 function requestHasImage(body) {
   if (!body || !Array.isArray(body.input)) return false;
   for (const item of body.input) {
     if (!item || typeof item !== 'object') continue;
-    if (item.type === 'function_call' && item.name === 'view_image') return true;
     const content = item.content;
     if (Array.isArray(content)) {
       for (const block of content) {
@@ -447,8 +448,12 @@ function translateRequestBody(body) {
       }
       mapped.push(t);
     }
-    if (ROUTE_CFG.enable_find_skill && hasIncomingTools && !mapped.some((t) => t && t.type === 'function' && t.name === skillFind.FIND_SKILL)) {
+    if (ROUTE_CFG.enable_find_skill && !mapped.some((t) => t && t.type === 'function' && t.name === skillFind.FIND_SKILL)) {
       mapped.push(skillFind.FIND_SKILL_FN);
+      toolsChanged = true;
+    }
+    if (!mapped.some((t) => t && ((t.type === 'function' && t.name === WEB_SEARCH) || t.type === WEB_SEARCH))) {
+      mapped.push(WEB_SEARCH_FN);
       toolsChanged = true;
     }
     if (ROUTE_CFG.imagine_enabled && !mapped.some((t) => t && t.type === 'function' && t.name === imagine.GENERATE_IMAGE)) {
@@ -795,13 +800,15 @@ function postUpstreamStream(upstream, body) {
 // function_call items (web_search / find_skill) and buffering the terminal
 // response.completed event. Returns the intercepted calls and the buffered
 // completed event so the caller can fulfill + continue or finalize.
-function pipeAndCollect(upstreamRes, clientRes, customNames, allowLifecycle) {
+function pipeAndCollect(upstreamRes, clientRes, customNames, allowLifecycle, outputIndexOffset, sequenceNumberOffset) {
   const state = { rewrittenIds: new Set(), customNames };
   const suppressed = new Set();          // item ids we are intercepting
   const pending = new Map();             // id -> { id, call_id, name, arguments }
   const interceptedCalls = [];
   let completedEvent = null;
   let leftover = '';
+  let maxOutputIndex = -1;
+  let maxSequenceNumber = -1;
 
   return new Promise((resolve, reject) => {
     upstreamRes.on('error', reject);
@@ -830,7 +837,11 @@ function pipeAndCollect(upstreamRes, clientRes, customNames, allowLifecycle) {
           clientRes.write(prefix + 'data: ' + dataLines.join('\n') + '\n\n');
           continue;
         }
+    if (Number.isInteger(obj.output_index)) obj.output_index += outputIndexOffset || 0;
+    if (Number.isInteger(obj.sequence_number)) obj.sequence_number += sequenceNumberOffset || 0;
     const t = obj.type || '';
+    if (Number.isInteger(obj.output_index)) maxOutputIndex = Math.max(maxOutputIndex, obj.output_index);
+    if (Number.isInteger(obj.sequence_number)) maxSequenceNumber = Math.max(maxSequenceNumber, obj.sequence_number);
 
     // Suppress duplicate lifecycle events after the first upstream turn.
         if (!allowLifecycle && (t === 'response.created' || t === 'response.in_progress' || t === 'response.queued')) {
@@ -884,7 +895,7 @@ function pipeAndCollect(upstreamRes, clientRes, customNames, allowLifecycle) {
       }
     });
    upstreamRes.on('end', () => {
-     resolve({ interceptedCalls, completedEvent });
+     resolve({ interceptedCalls, completedEvent, maxOutputIndex, maxSequenceNumber });
    });
   });
 }
@@ -930,7 +941,16 @@ async function runStreamingLoop(upstream, body, clientRes, info, options) {
       return;
     }
 
-    const result = await pipeAndCollect(upstreamRes, clientRes, customNames, loop === 0);
+    const result = await pipeAndCollect(
+      upstreamRes,
+      clientRes,
+      customNames,
+      loop === 0,
+      loop === 0 ? 0 : seq.index,
+      loop === 0 ? 0 : seq.num
+    );
+    seq.index = Math.max(seq.index, result.maxOutputIndex + 1);
+    seq.num = Math.max(seq.num, result.maxSequenceNumber + 1);
     const calls = result.interceptedCalls;
 
     if (calls.length === 0) {
@@ -954,32 +974,17 @@ async function runStreamingLoop(upstream, body, clientRes, info, options) {
          outputStr = '[web_search error]\n' + err.message;
        }
      } else if (call.name === imagine.GENERATE_IMAGE) {
-       // Emit image_generation_begin lifecycle event before the API call
-       // so the UI shows a "generating..." state (ImageGenerationBeginEvent).
-       const genArgs = parseArgsObject(call.arguments);
-       markers.writeSseEvent(clientRes, 'image_generation_begin', {
-         type: 'image_generation_begin',
-         prompt: String(genArgs.prompt || ''),
-       });
+       const startedMarker = markers.makeImageGenerationStartedMarker(call);
+       const markerIndex = markers.emitOutputItemAdded(clientRes, startedMarker, seq);
        try {
          const r = await imagine.fulfillGenerateImage(call, { host: UPSTREAM_HOST, port: UPSTREAM_PORT }, ROUTE_CFG, debugLog);
          outputStr = r.output;
        } catch (err) {
          outputStr = '[generate_image error] ' + err.message;
        }
-       // Emit image_generation_end lifecycle event after generation completes
-       // (ImageGenerationEndEvent with 5 elements).
-       let endData = { type: 'image_generation_end', status: 'completed' };
-       try {
-         const parsed = JSON.parse(outputStr);
-         if (parsed.path) endData.saved_path = parsed.path;
-         if (parsed.enhancedPrompt) endData.revised_prompt = parsed.enhancedPrompt;
-         else if (parsed.originalPrompt) endData.revised_prompt = parsed.originalPrompt;
-         if (parsed.model) endData.model = parsed.model;
-         if (parsed.mimeType) endData.result = { mimeType: parsed.mimeType };
-       } catch {}
-       if (outputStr.startsWith('[generate_image error]')) endData.status = 'failed';
-       markers.writeSseEvent(clientRes, 'image_generation_end', endData);
+       const doneMarker = markers.makeImageGenerationMarker(call, outputStr);
+       markers.emitOutputItemDoneAt(clientRes, doneMarker, markerIndex, seq);
+       emittedItems.push(doneMarker);
      } else if (call.name === imagine.PROXY_STATUS) {
        const r = imagine.fulfillProxyStatus(call, ROUTE_CFG, debugLog);
        outputStr = r.output;
@@ -991,7 +996,7 @@ async function runStreamingLoop(upstream, body, clientRes, info, options) {
     // web_search -> web_search_call chip; generate_image -> image_generation_call chip;
     // find_skill / ollama_proxy_status -> no chip (fulfilled silently).
     const marker = markers.makeMarker(call, outputStr);
-    if (marker) {
+    if (marker && call.name !== imagine.GENERATE_IMAGE) {
       markers.emitOutputItem(clientRes, marker, seq);
       emittedItems.push(marker);
     }

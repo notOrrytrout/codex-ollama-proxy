@@ -29,7 +29,10 @@ const GENERATE_IMAGE_FN = {
   description: 'Generate a new image from a text prompt, or edit an existing ' +
     'image. For text-to-image, provide only the prompt. For image editing ' +
     '(image-to-image), provide both prompt and inputImagePath. The prompt ' +
-    'should describe what you want to create or what changes to make.',
+    'should describe what you want to create or what changes to make. After ' +
+    'this tool returns a saved image path, do not call view_image unless the ' +
+    'user explicitly asks you to inspect it; respond with the saved path or a ' +
+    'markdown image link.',
   parameters: {
     type: 'object',
     properties: {
@@ -536,10 +539,10 @@ async function fulfillGenerateImage(call, upstream, config, log) {
     model: result.metadata.model,
     mimeType: result.metadata.mimeType,
     bytes: result.imageData.length,
+    originalPrompt: prompt,
   };
   if (inputImagePath) output.inputImagePath = inputImagePath;
   if (enhancedPrompt !== prompt) {
-    output.originalPrompt = prompt;
     output.enhancedPrompt = enhancedPrompt;
   }
   if (result.metadata.revisedPrompt) output.revisedPrompt = result.metadata.revisedPrompt;

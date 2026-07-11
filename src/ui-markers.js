@@ -54,6 +54,20 @@ function emitOutputItem(clientRes, item, seq) {
   });
 }
 
+function emitOutputItemAdded(clientRes, item, seq) {
+  const idx = seq.index++;
+  writeSseEvent(clientRes, 'response.output_item.added', {
+    type: 'response.output_item.added', output_index: idx, sequence_number: seq.num++, item,
+  });
+  return idx;
+}
+
+function emitOutputItemDoneAt(clientRes, item, outputIndex, seq) {
+  writeSseEvent(clientRes, 'response.output_item.done', {
+    type: 'response.output_item.done', output_index: outputIndex, sequence_number: seq.num++, item,
+  });
+}
+
 // Build the { callItem, outputItem } marker pair for a fulfilled call.
 // `web_search` -> web_search_call + web_search_output (matching the shape
 // proxy.js emits for a passthrough web_search call). `find_skill` -> tool_search_call
@@ -99,11 +113,16 @@ function makeImageGenerationMarker(call, outputStr) {
 
   const item = {
     type: 'image_generation_call',
-    status: 'completed',
+    status: outputStr && outputStr.startsWith('[generate_image error]') ? 'failed' : 'completed',
   };
   if (call.id) item.id = call.id;
   if (parsed.enhancedPrompt) item.revised_prompt = parsed.enhancedPrompt;
+  else if (parsed.revisedPrompt) item.revised_prompt = parsed.revisedPrompt;
   else if (parsed.originalPrompt) item.revised_prompt = parsed.originalPrompt;
+  else {
+    const args = parseArgs(call.arguments);
+    if (args.prompt) item.revised_prompt = String(args.prompt);
+  }
   if (parsed.path) item.saved_path = parsed.path;
   // result.b64_json: we don't inline the image bytes (they're saved to disk);
   // the app uses saved_path to display the image.
@@ -112,6 +131,17 @@ function makeImageGenerationMarker(call, outputStr) {
     if (parsed.mimeType) item.result.mimeType = parsed.mimeType;
     if (parsed.bytes) item.result.bytes = parsed.bytes;
   }
+  return item;
+}
+
+function makeImageGenerationStartedMarker(call) {
+  const args = parseArgs(call.arguments);
+  const item = {
+    type: 'image_generation_call',
+    status: 'in_progress',
+  };
+  if (call.id) item.id = call.id;
+  if (args.prompt) item.revised_prompt = String(args.prompt);
   return item;
 }
 
@@ -144,8 +174,11 @@ function injectMarkersIntoCompleted(completedEvent, markerItems) {
 module.exports = {
   writeSseEvent,
   emitOutputItem,
+  emitOutputItemAdded,
+  emitOutputItemDoneAt,
   makeMarker,
   makeWebSearchMarker,
+  makeImageGenerationStartedMarker,
   makeImageGenerationMarker,
   makeProxyStatusMarker,
   injectMarkersIntoCompleted,
