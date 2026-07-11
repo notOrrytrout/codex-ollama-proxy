@@ -1,5 +1,7 @@
 'use strict';
 
+const fs = require('fs');
+
 // proxy_ui_markers.js
 //
 // Synthetic UI marker for the proxy-fulfilled `web_search` tool.
@@ -124,12 +126,19 @@ function makeImageGenerationMarker(call, outputStr) {
     if (args.prompt) item.revised_prompt = String(args.prompt);
   }
   if (parsed.path) item.saved_path = parsed.path;
-  // result.b64_json: we don't inline the image bytes (they're saved to disk);
-  // the app uses saved_path to display the image.
-  if (parsed.mimeType || parsed.bytes) {
-    item.result = {};
-    if (parsed.mimeType) item.result.mimeType = parsed.mimeType;
-    if (parsed.bytes) item.result.bytes = parsed.bytes;
+  // ResponseItem::ImageGenerationCall has a string `result`; the app-server's
+  // ThreadItem::ImageGeneration normalizer accepts data URLs, URLs, paths, or
+  // bare base64. Include a data URL here to test whether Rust bridges provider
+  // image_generation_call items into UI imageGeneration items.
+  if (parsed.path) {
+    try {
+      const mime = parsed.mimeType || 'image/png';
+      item.result = 'data:' + mime + ';base64,' + fs.readFileSync(parsed.path).toString('base64');
+    } catch (e) {
+      item.result = parsed.path;
+    }
+  } else if (typeof parsed.result === 'string') {
+    item.result = parsed.result;
   }
   return item;
 }
