@@ -89,12 +89,46 @@ function makeWebSearchMarker(call, outputStr) {
   return item;
 }
 
+function makeImageGenerationMarker(call, outputStr) {
+  // Build the native image_generation_call item (matching the shape
+  // ResponseItem::ImageGenerationCall in the Codex Rust server).
+  // Fields: id, status, revised_prompt, result, saved_path.
+  // The app renders an "Image generated" chip from saved_path + revised_prompt.
+  let parsed = {};
+  try { parsed = JSON.parse(outputStr); } catch {}
+
+  const item = {
+    type: 'image_generation_call',
+    status: 'completed',
+  };
+  if (call.id) item.id = call.id;
+  if (parsed.enhancedPrompt) item.revised_prompt = parsed.enhancedPrompt;
+  else if (parsed.originalPrompt) item.revised_prompt = parsed.originalPrompt;
+  if (parsed.path) item.saved_path = parsed.path;
+  // result.b64_json: we don't inline the image bytes (they're saved to disk);
+  // the app uses saved_path to display the image.
+  if (parsed.mimeType || parsed.bytes) {
+    item.result = {};
+    if (parsed.mimeType) item.result.mimeType = parsed.mimeType;
+    if (parsed.bytes) item.result.bytes = parsed.bytes;
+  }
+  return item;
+}
+
+function makeProxyStatusMarker(call, outputStr) {
+  // proxy_status is fulfilled silently — no renderable chip in the Codex app.
+  // The result is fed back to the model as function_call_output but no marker
+  // is emitted to the UI (same as find_skill).
+  return null;
+}
+
 function makeMarker(call, outputStr) {
-  // Only web_search has a renderable marker. find_skill is fulfilled silently
-  // (no chip exists for it in the Codex app), so makeMarker returns null for it
-  // and runStreamingLoop skips marker emission while still feeding the result
-  // back to the model.
+  // web_search -> web_search_call chip
+  // generate_image -> image_generation_call chip
+  // proxy_status -> no chip (fulfilled silently, same as find_skill)
   if (call.name === WEB_SEARCH) return makeWebSearchMarker(call, outputStr);
+  if (call.name === 'generate_image') return makeImageGenerationMarker(call, outputStr);
+  if (call.name === 'proxy_status') return makeProxyStatusMarker(call, outputStr);
   return null;
 }
 
@@ -112,5 +146,7 @@ module.exports = {
   emitOutputItem,
   makeMarker,
   makeWebSearchMarker,
+  makeImageGenerationMarker,
+  makeProxyStatusMarker,
   injectMarkersIntoCompleted,
 };

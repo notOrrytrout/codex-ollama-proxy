@@ -624,6 +624,42 @@ function translateOutputItem(item, state) {
     debugLog('response: function_call -> web_search_call (call_id=' + item.call_id + ')');
     return out;
   }
+  if (item.type === 'function_call' && item.name === imagine.GENERATE_IMAGE) {
+    // generate_image -> image_generation_call (native Codex server item type).
+    // The proxy fulfills generate_image locally; this translation handles the
+    // non-streaming path where the function_call appears in the final response.
+    // Fields match ResponseItem::ImageGenerationCall in the Rust server:
+    // id, status, revised_prompt, result, saved_path.
+    let parsedOutput = {};
+    try {
+      // The output was fed back as function_call_output in the loop; we can't
+      // access it here, so we build a minimal item from the call args.
+    } catch {}
+    const args = parseArgsObject(item.arguments);
+    const out = {
+      type: 'image_generation_call',
+      status: 'completed',
+    };
+    if (item.call_id !== undefined) out.call_id = item.call_id;
+    if (item.id) { out.id = item.id; state.rewrittenIds.add(item.id); }
+    if (args.prompt) out.revised_prompt = args.prompt;
+    debugLog('response: function_call -> image_generation_call (call_id=' + item.call_id + ')');
+    return out;
+  }
+  if (item.type === 'function_call' && item.name === imagine.PROXY_STATUS) {
+    // proxy_status is fulfilled silently; translate to a no-op item so the
+    // app-server doesn't try to execute it as a pending function_call.
+    const out = {
+      type: 'function_call',
+      call_id: item.call_id,
+      name: item.name,
+      arguments: item.arguments || '{}',
+      status: 'completed',
+    };
+    if (item.id) { out.id = item.id; state.rewrittenIds.add(item.id); }
+    debugLog('response: proxy_status function_call marked completed (call_id=' + item.call_id + ')');
+    return out;
+  }
   if (item.type === 'function_call' && item.name && state.customNames.has(item.name)) {
     // freeform/custom tool (apply_patch): function_call -> custom_tool_call
     const out = {
@@ -916,13 +952,43 @@ async function runStreamingLoop(upstream, body, clientRes, info, options) {
        } catch (err) {
          outputStr = '[web_search error]\n' + err.message;
        }
+     } else if (call.name === imagine.GENERATE_IMAGE) {
+       // Emit image_generation_begin lifecycle event before the API call
+       // so the UI shows a "generating..." state (ImageGenerationBeginEvent).
+       const genArgs = parseArgsObject(call.arguments);
+       markers.writeSseEvent(clientRes, 'image_generation_begin', {
+         type: 'image_generation_begin',
+         prompt: String(genArgs.prompt || ''),
+       });
+       try {
+         const r = await imagine.fulfillGenerateImage(call, { host: UPSTREAM_HOST, port: UPSTREAM_PORT }, ROUTE_CFG, debugLog);
+         outputStr = r.output;
+       } catch (err) {
+         outputStr = '[generate_image error] ' + err.message;
+       }
+       // Emit image_generation_end lifecycle event after generation completes
+       // (ImageGenerationEndEvent with 5 elements).
+       let endData = { type: 'image_generation_end', status: 'completed' };
+       try {
+         const parsed = JSON.parse(outputStr);
+         if (parsed.path) endData.saved_path = parsed.path;
+         if (parsed.enhancedPrompt) endData.revised_prompt = parsed.enhancedPrompt;
+         else if (parsed.originalPrompt) endData.revised_prompt = parsed.originalPrompt;
+         if (parsed.model) endData.model = parsed.model;
+         if (parsed.mimeType) endData.result = { mimeType: parsed.mimeType };
+       } catch {}
+       if (outputStr.startsWith('[generate_image error]')) endData.status = 'failed';
+       markers.writeSseEvent(clientRes, 'image_generation_end', endData);
+     } else if (call.name === imagine.PROXY_STATUS) {
+       const r = imagine.fulfillProxyStatus(call, ROUTE_CFG, debugLog);
+       outputStr = r.output;
      } else {
        // find_skill
        const r = skillFind.fulfillFindSkill(call, debugLog);
        outputStr = r.output;
      }
-    // web_search emits a UI marker; find_skill is fulfilled with no marker
-    // (the Codex app has no renderable chip for it -- see proxy_ui_markers.js).
+    // web_search -> web_search_call chip; generate_image -> image_generation_call chip;
+    // find_skill / proxy_status -> no chip (fulfilled silently).
     const marker = markers.makeMarker(call, outputStr);
     if (marker) {
       markers.emitOutputItem(clientRes, marker, seq);
@@ -1089,11 +1155,71 @@ const server = http.createServer((clientReq, clientRes) => {
     if (isResponses && body && ROUTE_CFG.imagine_enabled && (imagine.hasGenerateImageTool(body) || imagine.hasProxyStatusTool(body))) {
       try {
         debugLog('imagine proxy loop enabled (generate_image + proxy_status)');
+        if (originalStream && imagine.hasGenerateImageTool(body)) {
+          // Emit image_generation_begin before the loop starts so the UI shows
+          // a loading state while the proxy calls the image backend.
+          clientRes.writeHead(200, {
+            'content-type': 'text/event-stream',
+            'cache-control': 'no-cache',
+            connection: 'keep-alive',
+          });
+          markers.writeSseEvent(clientRes, 'image_generation_begin', {
+            type: 'image_generation_begin',
+            prompt: '',
+          });
+        }
         const result = await imagine.runGenerateImageLoop({ host: UPSTREAM_HOST, port: UPSTREAM_PORT }, body, ROUTE_CFG, { log: (...a) => debugLog(...a) });
         const response = result.response;
         translateFinalResponse(response, info);
-        if (originalStream) sendSseCompleted(clientRes, response);
-        else sendJsonResponse(clientRes, 200, response);
+        if (originalStream) {
+          if (imagine.hasGenerateImageTool(body) && result.fulfilled) {
+            // Emit image_generation_end after the loop completes.
+            let endData = { type: 'image_generation_end', status: 'completed' };
+            // Extract saved_path from the response output items
+            if (Array.isArray(response.output)) {
+              for (const item of response.output) {
+                if (item && item.type === 'image_generation_call' && item.saved_path) {
+                  endData.saved_path = item.saved_path;
+                  if (item.revised_prompt) endData.revised_prompt = item.revised_prompt;
+                  break;
+                }
+              }
+            }
+            markers.writeSseEvent(clientRes, 'image_generation_end', endData);
+          }
+          // sendSseCompleted will call writeHead again if headers not sent yet;
+          // if we already wrote headers (image_generation_begin case), we need
+          // to send the output items manually.
+          if (clientRes.headersSent) {
+            // Headers already sent (begin event was emitted) — send output items + completed
+            let sequence = 0;
+            if (Array.isArray(response.output)) {
+              response.output.forEach((item, outputIndex) => {
+                clientRes.write('event: response.output_item.added\n');
+                clientRes.write('data: ' + JSON.stringify({
+                  type: 'response.output_item.added',
+                  output_index: outputIndex,
+                  sequence_number: sequence++,
+                  item,
+                }) + '\n\n');
+                clientRes.write('event: response.output_item.done\n');
+                clientRes.write('data: ' + JSON.stringify({
+                  type: 'response.output_item.done',
+                  output_index: outputIndex,
+                  sequence_number: sequence++,
+                  item,
+                }) + '\n\n');
+              });
+            }
+            clientRes.write('event: response.completed\n');
+            clientRes.write('data: ' + JSON.stringify({ type: 'response.completed', response }) + '\n\n');
+            clientRes.end();
+          } else {
+            sendSseCompleted(clientRes, response);
+          }
+        } else {
+          sendJsonResponse(clientRes, 200, response);
+        }
         return;
       } catch (e) {
         log('generate_image proxy loop failed: ' + e.message);
