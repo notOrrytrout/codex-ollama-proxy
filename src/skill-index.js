@@ -19,7 +19,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const CODEX_DIR = path.resolve(__dirname, '../..'); // ~/.codex
+const CODEX_DIR = process.env.CODEX_HOME || path.join(process.env.HOME, '.codex');
 const SKILLS_DIR = path.join(CODEX_DIR, 'skills');
 const SYSTEM_SKILLS_DIR = path.join(SKILLS_DIR, '.system');
 const PLUGINS_CACHE_DIR = path.join(CODEX_DIR, 'plugins', 'cache');
