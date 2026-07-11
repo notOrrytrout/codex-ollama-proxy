@@ -18,6 +18,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const codexAppServerSkills = require('./codex-app-server-skills');
 
 const CODEX_DIR = process.env.CODEX_HOME || path.join(process.env.HOME, '.codex');
 const SKILLS_DIR = path.join(CODEX_DIR, 'skills');
@@ -179,6 +180,9 @@ function indexPluginSkills(entries) {
 }
 
 function buildEntries() {
+  const appServerEntries = codexAppServerSkills.buildEntriesFromAppServer();
+  if (appServerEntries.length > 0) return appServerEntries;
+
   const entries = [];
   indexUserSkills(entries);
   indexSystemSkills(entries);
