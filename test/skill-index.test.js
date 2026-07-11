@@ -146,7 +146,9 @@ test('skill index uses Codex app-server effective enabled skills when available'
 test('fallback skill index uses installed plugin markers and skill disables', () => {
   const originalCodexHome = process.env.CODEX_HOME;
   const originalAppServerPath = process.env.CODEX_APP_SERVER_PATH;
+  const originalAgentsSkillsDir = process.env.CODEX_AGENTS_SKILLS_DIR;
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-skill-fallback-'));
+  const agentsSkillsRoot = path.join(tempHome, '.agents', 'skills');
   const superSkillDir = path.join(
     tempHome,
     'plugins',
@@ -167,6 +169,8 @@ test('fallback skill index uses installed plugin markers and skill disables', ()
     'skills',
     'brainstorming'
   );
+  const agentSkillDir = path.join(agentsSkillsRoot, 'wrangler');
+  const disabledAgentSkillDir = path.join(agentsSkillsRoot, 'web-perf');
   const uninstalledSkillDir = path.join(
     tempHome,
     'plugins',
@@ -179,6 +183,8 @@ test('fallback skill index uses installed plugin markers and skill disables', ()
   );
   fs.mkdirSync(superSkillDir, { recursive: true });
   fs.mkdirSync(disabledSkillDir, { recursive: true });
+  fs.mkdirSync(agentSkillDir, { recursive: true });
+  fs.mkdirSync(disabledAgentSkillDir, { recursive: true });
   fs.mkdirSync(uninstalledSkillDir, { recursive: true });
   fs.mkdirSync(path.join(tempHome, 'plugins', 'cache', 'openai-curated-remote', 'superpowers'), { recursive: true });
   fs.mkdirSync(path.join(tempHome, 'plugins', 'cache', 'openai-curated-remote', 'superpowers', '6.1.1', '.codex-plugin'), { recursive: true });
@@ -194,29 +200,37 @@ test('fallback skill index uses installed plugin markers and skill disables', ()
   );
   fs.writeFileSync(path.join(superSkillDir, 'SKILL.md'), '---\nname: systematic-debugging\ndescription: Debug bugs\n---\n', 'utf8');
   fs.writeFileSync(path.join(disabledSkillDir, 'SKILL.md'), '---\nname: brainstorming\ndescription: Think first\n---\n', 'utf8');
+  fs.writeFileSync(path.join(agentSkillDir, 'SKILL.md'), '---\nname: wrangler\ndescription: Cloudflare CLI\n---\n', 'utf8');
+  fs.writeFileSync(path.join(disabledAgentSkillDir, 'SKILL.md'), '---\nname: web-perf\ndescription: Performance checks\n---\n', 'utf8');
   fs.writeFileSync(path.join(uninstalledSkillDir, 'SKILL.md'), '---\nname: not-installed:unused\ndescription: Should not appear\n---\n', 'utf8');
   fs.writeFileSync(
     path.join(tempHome, 'config.toml'),
-    '[[skills.config]]\nname = "superpowers:brainstorming"\nenabled = false\n',
+    '[[skills.config]]\nname = "superpowers:brainstorming"\nenabled = false\n\n' +
+      '[[skills.config]]\npath = "' + path.join(disabledAgentSkillDir, 'SKILL.md') + '"\nenabled = false\n',
     'utf8'
   );
 
   try {
     process.env.CODEX_HOME = tempHome;
     process.env.CODEX_APP_SERVER_PATH = path.join(tempHome, 'missing-codex');
+    process.env.CODEX_AGENTS_SKILLS_DIR = agentsSkillsRoot;
     delete require.cache[require.resolve('../src/codex-app-server-skills')];
     delete require.cache[require.resolve('../src/skill-index')];
     const skillIndex = require('../src/skill-index');
 
     const entries = skillIndex.buildEntries();
 
-    assert.deepEqual(entries.map((entry) => entry.skill_name), ['superpowers:systematic-debugging']);
-    assert.equal(entries[0].plugin_name, 'superpowers');
+    assert.deepEqual(entries.map((entry) => entry.skill_name), ['wrangler', 'superpowers:systematic-debugging']);
+    assert.equal(entries[0].plugin_name, '');
+    assert.equal(entries[0].scope, 'user');
+    assert.equal(entries[1].plugin_name, 'superpowers');
   } finally {
     if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = originalCodexHome;
     if (originalAppServerPath === undefined) delete process.env.CODEX_APP_SERVER_PATH;
     else process.env.CODEX_APP_SERVER_PATH = originalAppServerPath;
+    if (originalAgentsSkillsDir === undefined) delete process.env.CODEX_AGENTS_SKILLS_DIR;
+    else process.env.CODEX_AGENTS_SKILLS_DIR = originalAgentsSkillsDir;
     delete require.cache[require.resolve('../src/codex-app-server-skills')];
     delete require.cache[require.resolve('../src/skill-index')];
     fs.rmSync(tempHome, { recursive: true, force: true });

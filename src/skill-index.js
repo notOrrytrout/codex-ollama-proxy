@@ -10,7 +10,8 @@
 //      ([plugins.name@set] enabled = true). The plugin name (from the
 //      plugin plugin.json) is stored per skill.
 //   2. User skills    -> ~/.codex/skills/<name>/SKILL.md (always on).
-//   3. System skills  -> ~/.codex/skills/.system/<name>/SKILL.md (always on).
+//   3. Agent skills   -> ~/.agents/skills/<name>/SKILL.md (always on unless disabled).
+//   4. System skills  -> ~/.codex/skills/.system/<name>/SKILL.md (always on).
 //
 // Each index entry is { skill_name, plugin_name, description, path, scope }.
 // Ranking weights (by design): plugin-name direct match is the highest signal,
@@ -23,6 +24,8 @@ const codexAppServerSkills = require('./codex-app-server-skills');
 const CODEX_DIR = process.env.CODEX_HOME || path.join(process.env.HOME, '.codex');
 const SKILLS_DIR = path.join(CODEX_DIR, 'skills');
 const SYSTEM_SKILLS_DIR = path.join(SKILLS_DIR, '.system');
+const AGENTS_SKILLS_DIR = process.env.CODEX_AGENTS_SKILLS_DIR ||
+  path.join(path.dirname(CODEX_DIR), '.agents', 'skills');
 const PLUGINS_CACHE_DIR = path.join(CODEX_DIR, 'plugins', 'cache');
 const CONFIG_TOML = path.join(CODEX_DIR, 'config.toml');
 
@@ -109,20 +112,25 @@ function parseEnabledPlugins(tomlPath) {
     .map(([id]) => id);
 }
 
-function parseDisabledSkills(tomlPath) {
+function parseDisabledSkillConfig(tomlPath) {
   const raw = readTextSafe(tomlPath);
-  if (!raw) return new Set();
-  const disabled = new Set();
+  const disabled = { names: new Set(), paths: new Set() };
+  if (!raw) return disabled;
   const lines = raw.split(/\r?\n/);
-  let current = null; // { name, enabled }
+  let current = null; // { name, path, enabled }
+  const addCurrent = () => {
+    if (!current || current.enabled !== false) return;
+    if (current.name) disabled.names.add(current.name);
+    if (current.path) disabled.paths.add(path.resolve(current.path));
+  };
   for (const line of lines) {
     if (/^\s*\[\[skills\.config\]\]\s*$/.test(line)) {
-      if (current && current.name && current.enabled === false) disabled.add(current.name);
-      current = { name: null, enabled: null };
+      addCurrent();
+      current = { name: null, path: null, enabled: null };
       continue;
     }
     if (/^\s*\[/.test(line) && !/^\s*\[\[skills\.config\]\]\s*$/.test(line)) {
-      if (current && current.name && current.enabled === false) disabled.add(current.name);
+      addCurrent();
       current = null;
       continue;
     }
@@ -132,11 +140,20 @@ function parseDisabledSkills(tomlPath) {
       current.name = (name[1] || name[2] || name[3] || '').trim();
       continue;
     }
+    const skillPath = /^\s*path\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s#]+))/.exec(line);
+    if (skillPath) {
+      current.path = (skillPath[1] || skillPath[2] || skillPath[3] || '').trim();
+      continue;
+    }
     const enabled = /^\s*enabled\s*=\s*(true|false)\b/i.exec(line);
     if (enabled) current.enabled = enabled[1].toLowerCase() === 'true';
   }
-  if (current && current.name && current.enabled === false) disabled.add(current.name);
+  addCurrent();
   return disabled;
+}
+
+function parseDisabledSkills(tomlPath) {
+  return parseDisabledSkillConfig(tomlPath).names;
 }
 
 function splitPluginId(id) {
@@ -200,31 +217,36 @@ function discoverInstalledPluginIds() {
 }
 
 function filterDisabledSkills(entries) {
-  const disabled = parseDisabledSkills(CONFIG_TOML);
-  if (disabled.size === 0) return entries;
-  return entries.filter((entry) => !disabled.has(entry.skill_name));
+  const disabled = parseDisabledSkillConfig(CONFIG_TOML);
+  if (disabled.names.size === 0 && disabled.paths.size === 0) return entries;
+  return entries.filter((entry) => {
+    if (disabled.names.has(entry.skill_name)) return false;
+    if (entry.path && disabled.paths.has(path.resolve(entry.path))) return false;
+    return true;
+  });
+}
+
+function indexSkillRoot(entries, skillsDir, scope) {
+  for (const dir of listDirs(skillsDir)) {
+    const s = readSkill(path.join(dir, 'SKILL.md'));
+    if (!s) continue;
+    entries.push({
+      skill_name: s.skill_name, plugin_name: '', description: s.description,
+      path: s.path, scope,
+    });
+  }
 }
 
 function indexUserSkills(entries) {
-  for (const dir of listDirs(SKILLS_DIR)) {
-    const s = readSkill(path.join(dir, 'SKILL.md'));
-    if (!s) continue;
-    entries.push({
-      skill_name: s.skill_name, plugin_name: '', description: s.description,
-      path: s.path, scope: 'user',
-    });
-  }
+  indexSkillRoot(entries, SKILLS_DIR, 'user');
+}
+
+function indexAgentSkills(entries) {
+  indexSkillRoot(entries, AGENTS_SKILLS_DIR, 'user');
 }
 
 function indexSystemSkills(entries) {
-  for (const dir of listDirs(SYSTEM_SKILLS_DIR)) {
-    const s = readSkill(path.join(dir, 'SKILL.md'));
-    if (!s) continue;
-    entries.push({
-      skill_name: s.skill_name, plugin_name: '', description: s.description,
-      path: s.path, scope: 'system',
-    });
-  }
+  indexSkillRoot(entries, SYSTEM_SKILLS_DIR, 'system');
 }
 
 function indexPluginSkills(entries) {
@@ -254,6 +276,7 @@ function buildEntries() {
 
   const entries = [];
   indexUserSkills(entries);
+  indexAgentSkills(entries);
   indexSystemSkills(entries);
   indexPluginSkills(entries);
   return filterDisabledSkills(entries);
@@ -374,6 +397,7 @@ function formatSkillSummary(entries) {
 
 module.exports = {
   CODEX_DIR,
+  AGENTS_SKILLS_DIR,
   getEntries,
   buildEntries,
   searchSkills,
@@ -381,5 +405,6 @@ module.exports = {
   summarizeSkills,
   formatSkillSummary,
   parseEnabledPlugins,
+  parseDisabledSkillConfig,
   parseDisabledSkills,
 };
