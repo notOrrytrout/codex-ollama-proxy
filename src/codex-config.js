@@ -269,11 +269,8 @@ function normalizeOpenAI(text) {
   lines = removeKey(lines, 'model_auto_compact_token_limit');
   lines = removeKey(lines, 'model_context_window');
   lines = removeKey(lines, 'model_provider');
+  lines = removeKey(lines, 'model_catalog_json');
   lines = removeKey(lines, 'web_search');
-
-  const catalogIndex = lines.findIndex((line) => /^\s*#?\s*model_catalog_json\s*=/.test(line));
-  if (catalogIndex >= 0) lines[catalogIndex] = 'model_catalog_json = "models_cache.json"';
-  else lines.push('model_catalog_json = "models_cache.json"');
 
   let normalized = lines.join('\n').replace(/\s+$/u, '') + '\n\n' + rest.replace(/^\n+/u, '');
   normalized = removeTable(normalized, OLLAMA_PROVIDER_HEADER);
