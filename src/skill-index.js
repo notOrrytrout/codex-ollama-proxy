@@ -72,32 +72,71 @@ function readSkill(skillMdPath) {
   return { skill_name: name, description, path: skillMdPath };
 }
 
-// Parse config.toml just for the [plugins.name@set] blocks with enabled=true.
-function parseEnabledPlugins(tomlPath) {
+// Parse config.toml just for top-level [plugins.name@set] blocks with
+// enabled=true/false. Nested plugin tool config tables intentionally do not
+// match this parser.
+function parsePluginEnablement(tomlPath) {
   const raw = readTextSafe(tomlPath);
-  if (!raw) return [];
-  const enabled = [];
+  if (!raw) return new Map();
+  const states = new Map();
   const lines = raw.split(/\r?\n/);
-  let current = null; // { id, seenEnabled }
+  let current = null; // { id, enabled }
   for (const line of lines) {
     const hdr = /^\s*\[plugins\.(?:'([^']+)'|"([^"]+)"|([^\]]+))\]/.exec(line);
     if (hdr) {
-      if (current && current.seenEnabled) enabled.push(current.id);
+      if (current && current.enabled != null) states.set(current.id, current.enabled);
       const id = hdr[1] || hdr[2] || hdr[3];
-      current = id ? { id: id.trim(), seenEnabled: false } : null;
+      current = id ? { id: id.trim(), enabled: null } : null;
       continue;
     }
     if (/^\s*\[[^\]]+\]\s*$/.test(line)) {
-      if (current && current.seenEnabled) enabled.push(current.id);
+      if (current && current.enabled != null) states.set(current.id, current.enabled);
       current = null;
       continue;
     }
-    if (current && /^\s*enabled\s*=\s*true\b/i.test(line)) {
-      current.seenEnabled = true;
+    if (current) {
+      const m = /^\s*enabled\s*=\s*(true|false)\b/i.exec(line);
+      if (m) current.enabled = m[1].toLowerCase() === 'true';
     }
   }
-  if (current && current.seenEnabled) enabled.push(current.id);
-  return enabled;
+  if (current && current.enabled != null) states.set(current.id, current.enabled);
+  return states;
+}
+
+function parseEnabledPlugins(tomlPath) {
+  return Array.from(parsePluginEnablement(tomlPath).entries())
+    .filter(([, enabled]) => enabled === true)
+    .map(([id]) => id);
+}
+
+function parseDisabledSkills(tomlPath) {
+  const raw = readTextSafe(tomlPath);
+  if (!raw) return new Set();
+  const disabled = new Set();
+  const lines = raw.split(/\r?\n/);
+  let current = null; // { name, enabled }
+  for (const line of lines) {
+    if (/^\s*\[\[skills\.config\]\]\s*$/.test(line)) {
+      if (current && current.name && current.enabled === false) disabled.add(current.name);
+      current = { name: null, enabled: null };
+      continue;
+    }
+    if (/^\s*\[/.test(line) && !/^\s*\[\[skills\.config\]\]\s*$/.test(line)) {
+      if (current && current.name && current.enabled === false) disabled.add(current.name);
+      current = null;
+      continue;
+    }
+    if (!current) continue;
+    const name = /^\s*name\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s#]+))/.exec(line);
+    if (name) {
+      current.name = (name[1] || name[2] || name[3] || '').trim();
+      continue;
+    }
+    const enabled = /^\s*enabled\s*=\s*(true|false)\b/i.exec(line);
+    if (enabled) current.enabled = enabled[1].toLowerCase() === 'true';
+  }
+  if (current && current.name && current.enabled === false) disabled.add(current.name);
+  return disabled;
 }
 
 function splitPluginId(id) {
@@ -137,6 +176,35 @@ function pickLatestVersionDir(setDir) {
   return path.join(setDir, dirs[0]);
 }
 
+function discoverInstalledPluginIds() {
+  const ids = new Set(parseEnabledPlugins(CONFIG_TOML));
+  const explicitStates = parsePluginEnablement(CONFIG_TOML);
+  let sets = [];
+  try { sets = fs.readdirSync(PLUGINS_CACHE_DIR, { withFileTypes: true }); } catch { return Array.from(ids); }
+  for (const setEnt of sets) {
+    if (!setEnt.isDirectory()) continue;
+    const setName = setEnt.name;
+    const setDir = path.join(PLUGINS_CACHE_DIR, setName);
+    let plugins = [];
+    try { plugins = fs.readdirSync(setDir, { withFileTypes: true }); } catch { continue; }
+    for (const pluginEnt of plugins) {
+      if (!pluginEnt.isDirectory()) continue;
+      const pluginName = pluginEnt.name;
+      const id = pluginName + '@' + setName;
+      if (explicitStates.get(id) === false) continue;
+      const installMarker = path.join(setDir, pluginName, '.codex-remote-plugin-install.json');
+      if (fs.existsSync(installMarker)) ids.add(id);
+    }
+  }
+  return Array.from(ids);
+}
+
+function filterDisabledSkills(entries) {
+  const disabled = parseDisabledSkills(CONFIG_TOML);
+  if (disabled.size === 0) return entries;
+  return entries.filter((entry) => !disabled.has(entry.skill_name));
+}
+
 function indexUserSkills(entries) {
   for (const dir of listDirs(SKILLS_DIR)) {
     const s = readSkill(path.join(dir, 'SKILL.md'));
@@ -160,7 +228,7 @@ function indexSystemSkills(entries) {
 }
 
 function indexPluginSkills(entries) {
-  const enabled = parseEnabledPlugins(CONFIG_TOML);
+  const enabled = discoverInstalledPluginIds();
   for (const id of enabled) {
     const parts = splitPluginId(id);
     const pluginRoot = pickLatestVersionDir(path.join(PLUGINS_CACHE_DIR, parts.set, parts.name));
@@ -171,8 +239,9 @@ function indexPluginSkills(entries) {
     for (const dir of listDirs(skillsDir)) {
       const s = readSkill(path.join(dir, 'SKILL.md'));
       if (!s) continue;
+      const skillName = s.skill_name.includes(':') ? s.skill_name : pluginName + ':' + s.skill_name;
       entries.push({
-        skill_name: s.skill_name, plugin_name: pluginName, description: s.description,
+        skill_name: skillName, plugin_name: pluginName, description: s.description,
         path: s.path, scope: 'plugin',
       });
     }
@@ -187,7 +256,7 @@ function buildEntries() {
   indexUserSkills(entries);
   indexSystemSkills(entries);
   indexPluginSkills(entries);
-  return entries;
+  return filterDisabledSkills(entries);
 }
 
 function getEntries(force) {
@@ -276,11 +345,41 @@ function formatSkillMatches(matches) {
   return lines.join('\n');
 }
 
+function summarizeSkills(entries) {
+  const summary = {
+    type: 'skills_summary',
+    total_enabled_skills: 0,
+    by_plugin: {},
+    by_scope: {},
+  };
+  for (const entry of entries || []) {
+    summary.total_enabled_skills += 1;
+    const plugin = entry.plugin_name || 'none';
+    const scope = entry.scope || 'unknown';
+    summary.by_plugin[plugin] = (summary.by_plugin[plugin] || 0) + 1;
+    summary.by_scope[scope] = (summary.by_scope[scope] || 0) + 1;
+  }
+  summary.by_plugin = Object.fromEntries(
+    Object.entries(summary.by_plugin).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+  );
+  summary.by_scope = Object.fromEntries(
+    Object.entries(summary.by_scope).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+  );
+  return summary;
+}
+
+function formatSkillSummary(entries) {
+  return JSON.stringify(summarizeSkills(entries), null, 2);
+}
+
 module.exports = {
   CODEX_DIR,
   getEntries,
   buildEntries,
   searchSkills,
   formatSkillMatches,
+  summarizeSkills,
+  formatSkillSummary,
   parseEnabledPlugins,
+  parseDisabledSkills,
 };

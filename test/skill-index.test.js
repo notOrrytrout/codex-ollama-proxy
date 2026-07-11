@@ -66,6 +66,12 @@ test('skill index uses Codex app-server effective enabled skills when available'
           scope: 'user',
           enabled: true,
         }, {
+          name: 'superpowers:brainstorming',
+          description: 'Use before creative work',
+          path: path.join(pluginSkillsRoot, 'brainstorming', 'SKILL.md'),
+          scope: 'user',
+          enabled: true,
+        }, {
           name: 'mzs-metrics:view-mzs-metrics',
           description: 'disabled skill',
           path: path.join(tempHome, 'disabled', 'SKILL.md'),
@@ -106,11 +112,107 @@ test('skill index uses Codex app-server effective enabled skills when available'
 
     const entries = skillIndex.buildEntries();
 
-    assert.deepEqual(entries.map((entry) => entry.skill_name), ['superpowers:systematic-debugging']);
+    assert.deepEqual(entries.map((entry) => entry.skill_name), [
+      'superpowers:systematic-debugging',
+      'superpowers:brainstorming',
+    ]);
     assert.equal(entries[0].plugin_name, 'superpowers');
     assert.equal(entries[0].scope, 'user');
+
+    const skillFind = require('../src/skill-find');
+    const result = skillFind.fulfillFindSkill({
+      call_id: 'call_summary',
+      arguments: JSON.stringify({ action: 'summary' }),
+    });
+    const summary = JSON.parse(result.output);
+
+    assert.equal(summary.type, 'skills_summary');
+    assert.equal(summary.total_enabled_skills, 2);
+    assert.deepEqual(summary.by_plugin, { superpowers: 2 });
+    assert.deepEqual(summary.by_scope, { user: 2 });
   } finally {
     childProcess.spawnSync = originalSpawnSync;
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = originalCodexHome;
+    if (originalAppServerPath === undefined) delete process.env.CODEX_APP_SERVER_PATH;
+    else process.env.CODEX_APP_SERVER_PATH = originalAppServerPath;
+    delete require.cache[require.resolve('../src/codex-app-server-skills')];
+    delete require.cache[require.resolve('../src/skill-index')];
+    delete require.cache[require.resolve('../src/skill-find')];
+    fs.rmSync(tempHome, { recursive: true, force: true });
+  }
+});
+
+test('fallback skill index uses installed plugin markers and skill disables', () => {
+  const originalCodexHome = process.env.CODEX_HOME;
+  const originalAppServerPath = process.env.CODEX_APP_SERVER_PATH;
+  const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-skill-fallback-'));
+  const superSkillDir = path.join(
+    tempHome,
+    'plugins',
+    'cache',
+    'openai-curated-remote',
+    'superpowers',
+    '6.1.1',
+    'skills',
+    'systematic-debugging'
+  );
+  const disabledSkillDir = path.join(
+    tempHome,
+    'plugins',
+    'cache',
+    'openai-curated-remote',
+    'superpowers',
+    '6.1.1',
+    'skills',
+    'brainstorming'
+  );
+  const uninstalledSkillDir = path.join(
+    tempHome,
+    'plugins',
+    'cache',
+    'openai-curated-remote',
+    'not-installed',
+    '1.0.0',
+    'skills',
+    'unused'
+  );
+  fs.mkdirSync(superSkillDir, { recursive: true });
+  fs.mkdirSync(disabledSkillDir, { recursive: true });
+  fs.mkdirSync(uninstalledSkillDir, { recursive: true });
+  fs.mkdirSync(path.join(tempHome, 'plugins', 'cache', 'openai-curated-remote', 'superpowers'), { recursive: true });
+  fs.mkdirSync(path.join(tempHome, 'plugins', 'cache', 'openai-curated-remote', 'superpowers', '6.1.1', '.codex-plugin'), { recursive: true });
+  fs.writeFileSync(
+    path.join(tempHome, 'plugins', 'cache', 'openai-curated-remote', 'superpowers', '.codex-remote-plugin-install.json'),
+    JSON.stringify({ schema_version: 1, remote_plugin_id: 'plugin-superpowers' }),
+    'utf8'
+  );
+  fs.writeFileSync(
+    path.join(tempHome, 'plugins', 'cache', 'openai-curated-remote', 'superpowers', '6.1.1', '.codex-plugin', 'plugin.json'),
+    JSON.stringify({ name: 'superpowers' }),
+    { encoding: 'utf8', flag: 'w' }
+  );
+  fs.writeFileSync(path.join(superSkillDir, 'SKILL.md'), '---\nname: systematic-debugging\ndescription: Debug bugs\n---\n', 'utf8');
+  fs.writeFileSync(path.join(disabledSkillDir, 'SKILL.md'), '---\nname: brainstorming\ndescription: Think first\n---\n', 'utf8');
+  fs.writeFileSync(path.join(uninstalledSkillDir, 'SKILL.md'), '---\nname: not-installed:unused\ndescription: Should not appear\n---\n', 'utf8');
+  fs.writeFileSync(
+    path.join(tempHome, 'config.toml'),
+    '[[skills.config]]\nname = "superpowers:brainstorming"\nenabled = false\n',
+    'utf8'
+  );
+
+  try {
+    process.env.CODEX_HOME = tempHome;
+    process.env.CODEX_APP_SERVER_PATH = path.join(tempHome, 'missing-codex');
+    delete require.cache[require.resolve('../src/codex-app-server-skills')];
+    delete require.cache[require.resolve('../src/skill-index')];
+    const skillIndex = require('../src/skill-index');
+
+    const entries = skillIndex.buildEntries();
+
+    assert.deepEqual(entries.map((entry) => entry.skill_name), ['superpowers:systematic-debugging']);
+    assert.equal(entries[0].plugin_name, 'superpowers');
+  } finally {
     if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = originalCodexHome;
     if (originalAppServerPath === undefined) delete process.env.CODEX_APP_SERVER_PATH;

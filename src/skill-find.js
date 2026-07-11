@@ -20,14 +20,14 @@ const MAX_LOOPS = 4;
 const FIND_SKILL_FN = {
   type: 'function',
   name: FIND_SKILL,
-  description: 'Find available Codex skills by keyword. Searches the index of enabled skills (both plugin and non-plugin) by skill name, plugin name, and description, with plugin-name matches ranked highest, then skill name, then description. Returns the file paths of the top matching SKILL.md files (default 5). Call this when you need to locate a relevant skill before reading or invoking one.',
+  description: 'Find available Codex skills by keyword, or summarize the enabled skill index. With action "search" (default), searches enabled skills by skill name, plugin name, and description, with plugin-name matches ranked highest, then skill name, then description. Returns the file paths of the top matching SKILL.md files (default 5). With action "summary", returns JSON counts for enabled skills by plugin and scope. Call this when you need to locate a relevant skill before reading or invoking one, or when you need to know what skill inventory is available.',
   parameters: {
     type: 'object',
     properties: {
-      query: { type: 'string', description: 'What you are looking for: a plugin name, skill name, or topic. Plugin-name matches rank highest.' },
+      action: { type: 'string', enum: ['search', 'summary'], description: '"search" to find matching skill paths (default), or "summary" to return counts for the enabled skill index.' },
+      query: { type: 'string', description: 'For action="search": what you are looking for, such as a plugin name, skill name, or topic. Plugin-name matches rank highest.' },
       limit: { type: 'number', description: 'Maximum number of matches to return (1-20). Defaults to 5.' },
     },
-    required: ['query'],
   },
 };
 
@@ -89,6 +89,18 @@ async function postResponses(upstream, body) {
 // Fulfill one find_skill call: search the enabled-skill index and format paths.
 function fulfillFindSkill(call, log) {
   const args = parseArgs(call.arguments);
+  const action = String(args.action || 'search').trim().toLowerCase();
+  if (action === 'summary') {
+    try {
+      const entries = skillIndex.getEntries();
+      log && log('find_skill summary -> ' + entries.length + ' enabled skill(s)');
+      return { call_id: call.call_id, output: skillIndex.formatSkillSummary(entries) };
+    } catch (err) {
+      log && log('find_skill summary failed: ' + err.message);
+      return { call_id: call.call_id, output: '[find_skill error] ' + err.message };
+    }
+  }
+
   const query = String(args.query || args.q || '').trim();
   if (!query) {
     return { call_id: call.call_id, output: '[find_skill error] query is required' };
