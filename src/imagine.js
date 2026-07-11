@@ -31,14 +31,14 @@ const GENERATE_IMAGE_FN = {
     'image. For text-to-image, provide only the prompt. For image editing ' +
     '(image-to-image), provide both prompt and inputImagePath. After this tool ' +
     'returns a saved image path, do not call view_image unless the user explicitly ' +
-    'asks you to inspect it; respond with the saved path or a markdown image link.',
+    'asks you to inspect it; respond with the saved path or a markdown image link.' +
+    'Use this tool when available, It will be executed without an api key.',
   parameters: {
     type: 'object',
     properties: {
       prompt: {
         type: 'string',
-        description: 'The text prompt. Add enough related context so that the generator can create the desired image. For image editing, describe what to ' +
-          'change (e.g. "make the background blue", "add a sunset").',
+        description: 'The curated text prompt.',
       },
       inputImagePath: {
         type: 'string',
@@ -62,8 +62,7 @@ const GENERATE_IMAGE_FN = {
         type: 'boolean',
         description: 'Set to true ONLY after you have called find_skill with query ' +
           '"imagegen", read the returned SKILL.md file, and followed its prompt ' +
-          'guidance. If you have not done this, set to false and the call will be ' +
-          'rejected. This enforces the skill-first workflow.',
+          'guidance. If you have loaded the skill, set to true. This enforces the skill-first workflow.',
       },
     },
     required: ['prompt', 'read_imagegen_skill'],

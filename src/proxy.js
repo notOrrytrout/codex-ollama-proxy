@@ -999,7 +999,7 @@ async function runStreamingLoop(upstream, body, clientRes, info, options) {
        // Yield to the event loop so the SSE frame reaches the client before
        // the synchronous fulfillment runs and the completed marker follows.
        const startedMarker = markers.makeImageGenerationStartedMarker(call);
-       const markerIndex = markers.emitOutputItemAdded(clientRes, startedMarker, seq);
+       const markerIndex = markers.emitOutputItemProgress(clientRes, startedMarker, seq);
        await new Promise((resolve) => setTimeout(resolve, 0));
        try {
          const r = await imagine.fulfillGenerateImage(call, { host: UPSTREAM_HOST, port: UPSTREAM_PORT }, ROUTE_CFG, debugLog);

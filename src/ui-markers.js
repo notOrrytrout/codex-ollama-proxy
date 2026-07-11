@@ -26,6 +26,8 @@ const fs = require('fs');
 // marker shaping + emission.
 
 const WEB_SEARCH = 'web_search';
+const IMAGE_GENERATION_LOADING_GIF =
+  'data:image/gif;base64,R0lGODlhGAAYAPAAAAAAAGtygCH/C05FVFNDQVBFMi4wAwEAAAAh+QQBHgAAACwAAAAAGAAYAAACMoSPqcvtD6MEodZprL5xe+iFTkg2pLicpaKiSfuxsJbOFmMHpj3CoCo5YSi0ofGIVBQAACH5BAEeAAAALAAAAAAYABgAgAAAANHV2wIyhI+py+0PowSh1mmsvnF76IVOSDakuJyloqJJ+7Gwls4WYwemPcKgKjlhKLSh8YhUFAAAOw==';
 
 function parseArgs(v) {
   if (v == null) return {};
@@ -61,6 +63,12 @@ function emitOutputItemAdded(clientRes, item, seq) {
   writeSseEvent(clientRes, 'response.output_item.added', {
     type: 'response.output_item.added', output_index: idx, sequence_number: seq.num++, item,
   });
+  return idx;
+}
+
+function emitOutputItemProgress(clientRes, item, seq) {
+  const idx = emitOutputItemAdded(clientRes, item, seq);
+  emitOutputItemDoneAt(clientRes, item, idx, seq);
   return idx;
 }
 
@@ -148,6 +156,7 @@ function makeImageGenerationStartedMarker(call) {
   const item = {
     type: 'image_generation_call',
     status: 'in_progress',
+    result: IMAGE_GENERATION_LOADING_GIF,
   };
   if (call.id) item.id = call.id;
   if (args.prompt) item.revised_prompt = String(args.prompt);
@@ -186,6 +195,7 @@ module.exports = {
   writeSseEvent,
   emitOutputItem,
   emitOutputItemAdded,
+  emitOutputItemProgress,
   emitOutputItemDoneAt,
   makeMarker,
   makeWebSearchMarker,
