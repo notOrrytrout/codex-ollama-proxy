@@ -88,9 +88,9 @@ Image generation configuration:
 When image generation is enabled, the proxy injects two synthetic function tools:
 
 - **generate_image** — Generate a new image from a text prompt, or edit an existing image (image-to-image). Parameters: prompt, inputImagePath (optional), aspectRatio, quality.
-- **proxy_status** — Check the current image generation configuration at runtime. Returns active provider, quality, enhancement status, and API key status.
+- **ollama_proxy_status** — Check the current image generation configuration at runtime. Returns active provider, quality, enhancement status, and API key status.
 
-The model can call `proxy_status` to check the configuration before generating images. The model can also run `codex-ollama-proxy imagine --status` or `--doctor` via shell commands.
+The model can call `ollama_proxy_status` to check the configuration before generating images. The model can also run `codex-ollama-proxy imagine --status` or `--doctor` via shell commands.
 
 ### Config Fields (proxy-models.toml)
 

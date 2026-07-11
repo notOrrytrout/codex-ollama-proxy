@@ -648,7 +648,7 @@ function translateOutputItem(item, state) {
     return out;
   }
   if (item.type === 'function_call' && item.name === imagine.PROXY_STATUS) {
-    // proxy_status is fulfilled silently; translate to a no-op item so the
+    // ollama_proxy_status is fulfilled silently; translate to a no-op item so the
     // app-server doesn't try to execute it as a pending function_call.
     const out = {
       type: 'function_call',
@@ -658,7 +658,7 @@ function translateOutputItem(item, state) {
       status: 'completed',
     };
     if (item.id) { out.id = item.id; state.rewrittenIds.add(item.id); }
-    debugLog('response: proxy_status function_call marked completed (call_id=' + item.call_id + ')');
+    debugLog('response: ollama_proxy_status function_call marked completed (call_id=' + item.call_id + ')');
     return out;
   }
   if (item.type === 'function_call' && item.name && state.customNames.has(item.name)) {
@@ -989,7 +989,7 @@ async function runStreamingLoop(upstream, body, clientRes, info, options) {
        outputStr = r.output;
      }
     // web_search -> web_search_call chip; generate_image -> image_generation_call chip;
-    // find_skill / proxy_status -> no chip (fulfilled silently).
+    // find_skill / ollama_proxy_status -> no chip (fulfilled silently).
     const marker = markers.makeMarker(call, outputStr);
     if (marker) {
       markers.emitOutputItem(clientRes, marker, seq);
@@ -1104,7 +1104,7 @@ const server = http.createServer((clientReq, clientRes) => {
       }
       if (!webSearch.hasNativeWebSearchTool(body) && (imagine.hasProxyStatusTool(body) || (ROUTE_CFG.imagine_enabled && imagine.hasGenerateImageTool(body)))) {
         try {
-          debugLog('imagine proxy loop enabled (generate_image + proxy_status)');
+          debugLog('imagine proxy loop enabled (generate_image + ollama_proxy_status)');
           const result = await imagine.runGenerateImageLoop({ host: UPSTREAM_HOST, port: UPSTREAM_PORT }, body, ROUTE_CFG, { log: (...a) => debugLog(...a) });
           const response = result.response;
           translateFinalResponse(response, info);

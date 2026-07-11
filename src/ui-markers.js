@@ -116,7 +116,7 @@ function makeImageGenerationMarker(call, outputStr) {
 }
 
 function makeProxyStatusMarker(call, outputStr) {
-  // proxy_status is fulfilled silently — no renderable chip in the Codex app.
+  // ollama_proxy_status is fulfilled silently — no renderable chip in the Codex app.
   // The result is fed back to the model as function_call_output but no marker
   // is emitted to the UI (same as find_skill).
   return null;
@@ -125,10 +125,10 @@ function makeProxyStatusMarker(call, outputStr) {
 function makeMarker(call, outputStr) {
   // web_search -> web_search_call chip
   // generate_image -> image_generation_call chip
-  // proxy_status -> no chip (fulfilled silently, same as find_skill)
+  // ollama_proxy_status -> no chip (fulfilled silently, same as find_skill)
   if (call.name === WEB_SEARCH) return makeWebSearchMarker(call, outputStr);
   if (call.name === 'generate_image') return makeImageGenerationMarker(call, outputStr);
-  if (call.name === 'proxy_status') return makeProxyStatusMarker(call, outputStr);
+  if (call.name === 'ollama_proxy_status') return makeProxyStatusMarker(call, outputStr);
   return null;
 }
 

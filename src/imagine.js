@@ -645,9 +645,9 @@ async function checkHealth(config) {
   return results;
 }
 
-// ── proxy_status synthetic tool ─────────────────────────────────────────────
+// ── ollama_proxy_status synthetic tool ──────────────────────────────────────
 // Lets the model query current image generation config at runtime.
-const PROXY_STATUS = 'proxy_status';
+const PROXY_STATUS = 'ollama_proxy_status';
 
 const PROXY_STATUS_FN = {
   type: 'function',
@@ -723,7 +723,7 @@ function fulfillProxyStatus(call, config, log) {
     hint: 'Changes to proxy-models.toml require a proxy restart to take effect: codex-ollama-proxy restart. After switching providers (switch openai/ollama), tell the user to restart Codex or open a fresh thread so provider discovery reloads.',
   };
 
-  log('proxy_status: returning full proxy config + commands');
+  log('ollama_proxy_status: returning full proxy config + commands');
 
   return {
     call_id: call.call_id,
