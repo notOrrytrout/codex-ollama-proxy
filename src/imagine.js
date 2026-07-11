@@ -38,7 +38,7 @@ const GENERATE_IMAGE_FN = {
     properties: {
       prompt: {
         type: 'string',
-        description: 'The text prompt. For image editing, describe what to ' +
+        description: 'The text prompt. Add enough related context so that the generator can create the desired image. For image editing, describe what to ' +
           'change (e.g. "make the background blue", "add a sunset").',
       },
       inputImagePath: {
