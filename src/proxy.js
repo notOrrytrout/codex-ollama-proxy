@@ -402,6 +402,7 @@ function applyModelRouting(body) {
 
 function translateRequestBody(body) {
   if (!body || typeof body !== 'object') return body;
+  liftAdditionalToolsInput(body);
   // Learn namespace/tool splits from the request tools (upfront tools) and
   // from tool_search_output items (deferred tools surfaced by tool_search).
   if (Array.isArray(body.tools)) ingestNamespaces(body.tools);
@@ -455,6 +456,41 @@ function translateRequestBody(body) {
   }
   if (inputChanged) debugLog('translated request input items');
   return body;
+}
+
+// Newer Codex app-server builds send turn-local tool definitions as an input
+// item: {type:"additional_tools", role:"developer", tools:[...]}.
+// Ollama-compatible /v1/responses endpoints do not accept that input item, but
+// they do accept the same definitions in the top-level tools array. Lift them
+// before the rest of the normal tool translation runs.
+function liftAdditionalToolsInput(body) {
+  if (!body || !Array.isArray(body.input)) return false;
+  const lifted = [];
+  const keptInput = [];
+  let changed = false;
+
+  for (const item of body.input) {
+    if (item && item.type === 'additional_tools' && Array.isArray(item.tools)) {
+      lifted.push(...item.tools);
+      changed = true;
+      const residual = {};
+      if (item.role) residual.role = item.role;
+      if (item.content !== undefined) residual.content = item.content;
+      if (Object.keys(residual).length > 1 || residual.content !== undefined) {
+        keptInput.push(residual);
+      }
+      continue;
+    }
+    keptInput.push(item);
+  }
+
+  if (!changed) return false;
+  body.input = keptInput;
+  if (lifted.length) {
+    body.tools = Array.isArray(body.tools) ? [...body.tools, ...lifted] : lifted;
+    debugLog('lifted additional_tools input item(s) into top-level tools: +' + lifted.length);
+  }
+  return true;
 }
 
 // --- response-side: Ollama -> Codex ---
