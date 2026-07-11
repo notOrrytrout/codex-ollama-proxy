@@ -58,8 +58,15 @@ const GENERATE_IMAGE_FN = {
         description: 'Quality preset. "fast" for quick drafts, "quality" for ' +
           'best results. Defaults to "fast".',
       },
+      read_imagegen_skill: {
+        type: 'boolean',
+        description: 'Set to true ONLY after you have called find_skill with query ' +
+          '"imagegen", read the returned SKILL.md file, and followed its prompt ' +
+          'guidance. If you have not done this, set to false and the call will be ' +
+          'rejected. This enforces the skill-first workflow.',
+      },
     },
-    required: ['prompt'],
+    required: ['prompt', 'read_imagegen_skill'],
   },
 };
 
@@ -397,6 +404,9 @@ async function fulfillGenerateImage(call, upstream, config, log) {
   const prompt = String(args.prompt || '').trim();
   if (!prompt) {
     return { call_id: call.call_id, output: '[generate_image error] prompt is required' };
+  }
+  if (!args.read_imagegen_skill) {
+    return { call_id: call.call_id, output: '[generate_image error] You must call find_skill with query "imagegen" first, read the returned SKILL.md file, and follow its prompt guidance before generating an image. Set read_imagegen_skill=true only after reading the skill.' };
   }
 
   // ── Handle reference image (image-to-image editing) ──

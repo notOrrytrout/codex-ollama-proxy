@@ -650,12 +650,18 @@ function translateOutputItem(item, state) {
     // non-streaming path where the function_call appears in the final response.
     // Fields match ResponseItem::ImageGenerationCall in the Rust server:
     // id, status, revised_prompt, result, saved_path.
-    let parsedOutput = {};
-    try {
-      // The output was fed back as function_call_output in the loop; we can't
-      // access it here, so we build a minimal item from the call args.
-    } catch {}
     const args = parseArgsObject(item.arguments);
+    if (!args.read_imagegen_skill) {
+      debugLog('response: image_gen__imagegen rejected — read_imagegen_skill not set (call_id=' + item.call_id + ')');
+      const out = {
+        type: 'image_generation_call',
+        status: 'failed',
+        error: 'You must call find_skill with query "imagegen" first, read the returned SKILL.md file, and follow its prompt guidance. Set read_imagegen_skill=true only after reading the skill.',
+      };
+      if (item.call_id !== undefined) out.call_id = item.call_id;
+      if (item.id) { out.id = item.id; state.rewrittenIds.add(item.id); }
+      return out;
+    }
     const out = {
       type: 'image_generation_call',
       status: 'completed',
