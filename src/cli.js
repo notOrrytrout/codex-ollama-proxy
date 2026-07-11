@@ -30,7 +30,7 @@ function usage() {
   codex-ollama-proxy install
   codex-ollama-proxy uninstall
   codex-ollama-proxy restart
-  codex-ollama-proxy imagine [--enable|--disable] [--service gemini|openai]
+  codex-ollama-proxy imagine [--enable|--disable] [--service gemini|openai --model MODEL]
   codex-ollama-proxy imagine [--api-key KEY] [--quality fast|balanced|quality]
   codex-ollama-proxy imagine [--enhance|--no-enhance] [--aspect-ratio RATIO]
   codex-ollama-proxy imagine --status
@@ -85,6 +85,11 @@ function init(options = {}) {
   }
 }
 
+// Redact imagine_api_key value in a TOML string so status() never leaks the key.
+function redactApiKey(text) {
+  return text.replace(/^(\s*imagine_api_key\s*=\s*").*(".*)$/m, '$1***$2');
+}
+
 function readRouteConfig() {
   if (!fs.existsSync(ROUTE_CONFIG)) init();
   return fs.readFileSync(ROUTE_CONFIG, 'utf8');
@@ -127,7 +132,7 @@ function switchMode(mode, flags) {
 function status() {
   codexConfig(['status']);
   console.log('');
-  console.log(readRouteConfig().trim());
+  console.log(redactApiKey(readRouteConfig()).trim());
   const req = http.get(`http://127.0.0.1:${PROXY_PORT}/v1/models`, { timeout: 2000 }, (res) => {
     res.resume();
     console.log(`\nproxy=http://127.0.0.1:${PROXY_PORT} status=${res.statusCode}`);
@@ -187,6 +192,7 @@ function imagineCmd(flags) {
   if (flags.status) {
     const text = readRouteConfig();
     const fields = ["imagine_enabled", "imagine_service", "imagine_api_key", "imagine_quality", "imagine_enhance", "imagine_aspect_ratio"];
+    fields.splice(2, 0, "imagine_model");
     console.log("Image generation configuration:");
     for (const f of fields) {
       const m = text.match(new RegExp("^\\s*" + f + "\\s*=\\s*(.*)$", "m"));
@@ -197,9 +203,20 @@ function imagineCmd(flags) {
     return;
   }
   let text = readRouteConfig();
+  // --service and --model must always be updated as a pair to prevent
+  // mismatched provider/model combinations (e.g. a Gemini model with OpenAI service).
+  if (flags.service && !flags.model) {
+    die('Error: --service must be used together with --model.\n'
+      + 'Example: codex-ollama-proxy imagine --service openai --model gpt-image-2 --api-key "KEY"');
+  }
+  if (flags.model && !flags.service) {
+    die('Error: --model must be used together with --service.\n'
+      + 'Example: codex-ollama-proxy imagine --service openai --model gpt-image-2 --api-key "KEY"');
+  }
   if (flags.enable) text = writeRouteValue(text, "imagine_enabled", true);
   if (flags.disable) text = writeRouteValue(text, "imagine_enabled", false);
   if (flags.service) text = writeRouteValue(text, "imagine_service", flags.service);
+  if (flags.model) text = writeRouteValue(text, "imagine_model", flags.model);
   if (flags.apiKey) text = writeRouteValue(text, "imagine_api_key", flags.apiKey);
   if (flags.quality) text = writeRouteValue(text, "imagine_quality", flags.quality);
   if (flags.enhance) text = writeRouteValue(text, "imagine_enhance", true);
@@ -211,7 +228,7 @@ function imagineCmd(flags) {
 
 function readImagineConfig() {
   const text = readRouteConfig();
-  const cfg = { imagine_enabled: false, imagine_service: "gemini", imagine_api_key: "", imagine_quality: "fast", imagine_enhance: false, imagine_aspect_ratio: "1:1", text_model: null };
+  const cfg = { imagine_enabled: false, imagine_service: "gemini", imagine_model: "", imagine_api_key: "", imagine_quality: "fast", imagine_enhance: false, imagine_aspect_ratio: "1:1", text_model: null };
   for (const line of text.split("\n")) {
     const m = line.match(/^\s*([A-Za-z_]+)\s*=\s*"([^"]*)"/);
     if (m && m[1] in cfg) cfg[m[1]] = m[2];

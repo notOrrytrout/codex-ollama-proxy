@@ -66,6 +66,12 @@ imagine_enabled = false
 #   "openai"  — OpenAI GPT Image 2. Requires OPENAI_API_KEY.
 imagine_service = "gemini"
 
+# Default model for the selected backend. Must match the provider — do not mix
+# a Gemini model with imagine_service = "openai" or vice versa. If empty, the
+# provider's built-in default is used (quality-dependent for Gemini, gpt-image-2 for OpenAI).
+# Update together with imagine_service: --service and --model must always be set as a pair.
+imagine_model = ""
+
 # API key for the selected backend. If empty, falls back to the corresponding
 # environment variable (GEMINI_API_KEY or OPENAI_API_KEY).
 imagine_api_key = ""

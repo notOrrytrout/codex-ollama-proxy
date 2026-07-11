@@ -67,6 +67,18 @@ catalog_exists=/Users/home/.codex/ollama-launch-models-ollama-working.json
 
 ### Configuration
 
+The `--service` and `--model` flags must always be set together as a pair. This prevents mismatched combinations (e.g. a Gemini model with `imagine_service = "openai"`). If either flag is provided without the other, the CLI will error.
+
+Common provider/model pairs:
+
+| Provider | Model | Example |
+|----------|-------|---------|
+| `openai` | `gpt-image-2` | `codex-ollama-proxy imagine --service openai --model gpt-image-2 --api-key "sk-..."` |
+| `gemini` | `gemini-3-pro-image-preview` | `codex-ollama-proxy imagine --service gemini --model gemini-3-pro-image-preview --api-key "..."` |
+| `gemini` | `gemini-3.1-flash-image-preview` | `codex-ollama-proxy imagine --service gemini --model gemini-3.1-flash-image-preview --api-key "..."` |
+
+If `imagine_model` is empty, the provider's built-in default is used (quality-dependent for Gemini, `gpt-image-2` for OpenAI).
+
 updated=/Users/home/.codex/ollama-shape-proxy/proxy-models.toml
 updated=/Users/home/.codex/ollama-shape-proxy/proxy-models.toml
 updated=/Users/home/.codex/ollama-shape-proxy/proxy-models.toml

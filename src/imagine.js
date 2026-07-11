@@ -505,6 +505,7 @@ async function fulfillGenerateImage(call, upstream, config, log) {
   try {
     result = await callImageBackend(enhancedPrompt, {
       service: config.imagine_service || 'gemini',
+      model: config.imagine_model || '',
       apiKey: config.imagine_api_key || '',
       quality: args.quality || config.imagine_quality || 'fast',
       aspectRatio: args.aspectRatio || config.imagine_aspect_ratio || '1:1',
@@ -695,6 +696,7 @@ function fulfillProxyStatus(call, config, log) {
       stream_proxy_loop: config.stream_proxy_loop !== false,
       imagine_enabled: config.imagine_enabled || false,
       imagine_service: config.imagine_service || 'gemini',
+      imagine_model: config.imagine_model || '(provider default)',
       imagine_api_key: maskedKey,
       imagine_quality: config.imagine_quality || 'fast',
       imagine_enhance: config.imagine_enhance || false,
@@ -711,7 +713,7 @@ function fulfillProxyStatus(call, config, log) {
       install: 'codex-ollama-proxy install',
       uninstall: 'codex-ollama-proxy uninstall',
       restart: 'codex-ollama-proxy restart',
-      imagine_enable: 'codex-ollama-proxy imagine --enable --service gemini|openai --api-key "KEY"',
+      imagine_enable: 'codex-ollama-proxy imagine --enable --service gemini|openai --model MODEL --api-key "KEY"',
       imagine_disable: 'codex-ollama-proxy imagine --disable',
       imagine_quality: 'codex-ollama-proxy imagine --quality fast|balanced|quality',
       imagine_enhance: 'codex-ollama-proxy imagine --enhance',
