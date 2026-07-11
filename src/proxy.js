@@ -329,6 +329,20 @@ function translateInputItem(item) {
         ...(item.id ? { id: item.id } : {}),
       };
     }
+    case 'image_generation_call': {
+      verboseToolLog('request input image_generation_call', item);
+      // Codex sends image_generation_call as a native item; Ollama needs it as
+      // a plain function_call with the image_gen__imagegen tool name.
+      const out = {
+        type: 'function_call',
+        call_id: item.call_id,
+        name: imagine.GENERATE_IMAGE,
+        arguments: JSON.stringify({ prompt: item.revised_prompt || '' }),
+      };
+      if (item.status) out.status = item.status;
+      if (item.id) { out.id = item.id; }
+      return out;
+    }
     default:
       return item;
   }
