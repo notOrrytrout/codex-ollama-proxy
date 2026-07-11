@@ -1089,7 +1089,7 @@ const server = http.createServer((clientReq, clientRes) => {
         log('request body parse/translate failed: ' + e.message + ' (passing through)');
       }
     }
-    if (isResponses && body && webSearch.hasNativeWebSearchTool(body)) {
+    if (isResponses && body && (webSearch.hasNativeWebSearchTool(body) || (ROUTE_CFG.imagine_enabled && (imagine.hasGenerateImageTool(body) || imagine.hasProxyStatusTool(body))) || (ROUTE_CFG.enable_find_skill && skillFind.hasFindSkillTool(body)))) {
       if (originalStream && ROUTE_CFG.stream_proxy_loop) {
         try {
           debugLog('streaming proxy loop enabled');
@@ -1152,80 +1152,7 @@ const server = http.createServer((clientReq, clientRes) => {
         log('find_skill proxy loop failed; falling through to normal proxy flow');
       }
     }
-    if (isResponses && body && ROUTE_CFG.imagine_enabled && (imagine.hasGenerateImageTool(body) || imagine.hasProxyStatusTool(body))) {
-      try {
-        debugLog('imagine proxy loop enabled (generate_image + proxy_status)');
-        if (originalStream && imagine.hasGenerateImageTool(body)) {
-          // Emit image_generation_begin before the loop starts so the UI shows
-          // a loading state while the proxy calls the image backend.
-          clientRes.writeHead(200, {
-            'content-type': 'text/event-stream',
-            'cache-control': 'no-cache',
-            connection: 'keep-alive',
-          });
-          markers.writeSseEvent(clientRes, 'image_generation_begin', {
-            type: 'image_generation_begin',
-            prompt: '',
-          });
-        }
-        const result = await imagine.runGenerateImageLoop({ host: UPSTREAM_HOST, port: UPSTREAM_PORT }, body, ROUTE_CFG, { log: (...a) => debugLog(...a) });
-        const response = result.response;
-        translateFinalResponse(response, info);
-        if (originalStream) {
-          if (imagine.hasGenerateImageTool(body) && result.fulfilled) {
-            // Emit image_generation_end after the loop completes.
-            let endData = { type: 'image_generation_end', status: 'completed' };
-            // Extract saved_path from the response output items
-            if (Array.isArray(response.output)) {
-              for (const item of response.output) {
-                if (item && item.type === 'image_generation_call' && item.saved_path) {
-                  endData.saved_path = item.saved_path;
-                  if (item.revised_prompt) endData.revised_prompt = item.revised_prompt;
-                  break;
-                }
-              }
-            }
-            markers.writeSseEvent(clientRes, 'image_generation_end', endData);
-          }
-          // sendSseCompleted will call writeHead again if headers not sent yet;
-          // if we already wrote headers (image_generation_begin case), we need
-          // to send the output items manually.
-          if (clientRes.headersSent) {
-            // Headers already sent (begin event was emitted) — send output items + completed
-            let sequence = 0;
-            if (Array.isArray(response.output)) {
-              response.output.forEach((item, outputIndex) => {
-                clientRes.write('event: response.output_item.added\n');
-                clientRes.write('data: ' + JSON.stringify({
-                  type: 'response.output_item.added',
-                  output_index: outputIndex,
-                  sequence_number: sequence++,
-                  item,
-                }) + '\n\n');
-                clientRes.write('event: response.output_item.done\n');
-                clientRes.write('data: ' + JSON.stringify({
-                  type: 'response.output_item.done',
-                  output_index: outputIndex,
-                  sequence_number: sequence++,
-                  item,
-                }) + '\n\n');
-              });
-            }
-            clientRes.write('event: response.completed\n');
-            clientRes.write('data: ' + JSON.stringify({ type: 'response.completed', response }) + '\n\n');
-            clientRes.end();
-          } else {
-            sendSseCompleted(clientRes, response);
-          }
-        } else {
-          sendJsonResponse(clientRes, 200, response);
-        }
-        return;
-      } catch (e) {
-        log('generate_image proxy loop failed: ' + e.message);
-        log('generate_image proxy loop failed; falling through to normal proxy flow');
-      }
-    }
+
     const upstreamHeaders = Object.assign({}, clientReq.headers);
     upstreamHeaders.host = UPSTREAM_HOST + ':' + UPSTREAM_PORT;
     upstreamHeaders['content-length'] = String(bodyBuf.length);
