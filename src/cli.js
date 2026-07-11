@@ -29,7 +29,12 @@ function usage() {
   codex-ollama-proxy logs [--tail N]
   codex-ollama-proxy install
   codex-ollama-proxy uninstall
-  codex-ollama-proxy restart`);
+  codex-ollama-proxy restart
+  codex-ollama-proxy imagine [--enable|--disable] [--service gemini|openai]
+  codex-ollama-proxy imagine [--api-key KEY] [--quality fast|balanced|quality]
+  codex-ollama-proxy imagine [--enhance|--no-enhance] [--aspect-ratio RATIO]
+  codex-ollama-proxy imagine --status
+  codex-ollama-proxy imagine --doctor`);
 }
 
 function die(message) {
@@ -56,7 +61,7 @@ function parseFlags(argv) {
     const eq = arg.indexOf('=');
     const key = (eq >= 0 ? arg.slice(2, eq) : arg.slice(2)).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
     if (eq >= 0) flags[key] = arg.slice(eq + 1);
-    else if (['force', 'auto-image', 'no-auto-image'].includes(arg.slice(2))) flags[key] = true;
+    else if (['force', 'auto-image', 'no-auto-image', 'enable', 'disable', 'enhance', 'no-enhance', 'doctor', 'status'].includes(arg.slice(2))) flags[key] = true;
     else flags[key] = argv[++i];
   }
   return { flags, rest };
@@ -164,6 +169,57 @@ function logs(flags) {
   run('tail', ['-n', n, path.join(RUNTIME_DIR, 'proxy.log')]);
 }
 
+
+function imagineCmd(flags) {
+  if (flags.doctor) {
+    const imagine = require("./imagine");
+    const config = readImagineConfig();
+    console.log("Image generation provider health check:");
+    imagine.checkHealth(config).then((results) => {
+      for (const [name, r] of Object.entries(results)) {
+        const status = r.ready ? "READY" : "FAIL";
+        const detail = r.error || (r.models ? r.models + " models" : "ok");
+        console.log("  " + name + ": " + status + " (" + detail + ")");
+      }
+    }).catch((e) => console.log("health check failed: " + e.message));
+    return;
+  }
+  if (flags.status) {
+    const text = readRouteConfig();
+    const fields = ["imagine_enabled", "imagine_service", "imagine_api_key", "imagine_quality", "imagine_enhance", "imagine_aspect_ratio"];
+    console.log("Image generation configuration:");
+    for (const f of fields) {
+      const m = text.match(new RegExp("^\\s*" + f + "\\s*=\\s*(.*)$", "m"));
+      const val = m ? m[1] : "(not set)";
+      const display = (f === "imagine_api_key" && val && val.length > 2) ? "(set)" : val;
+      console.log("  " + f + " = " + display);
+    }
+    return;
+  }
+  let text = readRouteConfig();
+  if (flags.enable) text = writeRouteValue(text, "imagine_enabled", true);
+  if (flags.disable) text = writeRouteValue(text, "imagine_enabled", false);
+  if (flags.service) text = writeRouteValue(text, "imagine_service", flags.service);
+  if (flags.apiKey) text = writeRouteValue(text, "imagine_api_key", flags.apiKey);
+  if (flags.quality) text = writeRouteValue(text, "imagine_quality", flags.quality);
+  if (flags.enhance) text = writeRouteValue(text, "imagine_enhance", true);
+  if (flags.noEnhance) text = writeRouteValue(text, "imagine_enhance", false);
+  if (flags.aspectRatio) text = writeRouteValue(text, "imagine_aspect_ratio", flags.aspectRatio);
+  fs.writeFileSync(ROUTE_CONFIG, text, "utf8");
+  console.log("updated=" + ROUTE_CONFIG);
+}
+
+function readImagineConfig() {
+  const text = readRouteConfig();
+  const cfg = { imagine_enabled: false, imagine_service: "gemini", imagine_api_key: "", imagine_quality: "fast", imagine_enhance: false, imagine_aspect_ratio: "1:1", text_model: null };
+  for (const line of text.split("\n")) {
+    const m = line.match(/^\s*([A-Za-z_]+)\s*=\s*"([^"]*)"/);
+    if (m && m[1] in cfg) cfg[m[1]] = m[2];
+    const b = line.match(/^\s*([A-Za-z_]+)\s*=\s*(true|false)\b/);
+    if (b && b[1] in cfg) cfg[b[1]] = b[2] === "true";
+  }
+  return cfg;
+}
 function main() {
   const [command, subcommand, ...tail] = process.argv.slice(2);
   const parsed = parseFlags(command === 'switch' ? tail : process.argv.slice(3));
@@ -176,6 +232,7 @@ function main() {
   if (command === 'logs') return logs(parsed.flags);
   if (command === 'install') return install();
   if (command === 'uninstall') return uninstall();
+  if (command === 'imagine') return imagineCmd(parseFlags(process.argv.slice(2)).flags);
   if (command === 'restart') {
     uninstall();
     return install();

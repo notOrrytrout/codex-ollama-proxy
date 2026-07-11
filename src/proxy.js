@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const webSearch = require('./web-search');
 const skillFind = require('./skill-find');
+const imagine = require('./imagine');
 const markers = require('./ui-markers');
 
 // proxy-models.toml drives per-request model auto-routing.
@@ -13,7 +14,7 @@ const CODEX_DIR = process.env.CODEX_HOME || path.join(process.env.HOME, '.codex'
 const RUNTIME_DIR = path.join(CODEX_DIR, 'ollama-shape-proxy');
 const PROXY_MODELS_PATH = path.join(RUNTIME_DIR, 'proxy-models.toml');
 const UPSTREAM_BODY_LOG = path.join(RUNTIME_DIR, 'upstream-bodies.jsonl');
-const ROUTE_CFG = { text_model: null, image_model: null, auto_route_image: false, verbose_tools: false, log_upstream_body: false, enable_find_skill: false, stream_proxy_loop: true };
+const ROUTE_CFG = { text_model: null, image_model: null, auto_route_image: false, verbose_tools: false, log_upstream_body: false, enable_find_skill: false, stream_proxy_loop: true, imagine_enabled: false, imagine_service: "gemini", imagine_api_key: "", imagine_quality: "fast", imagine_enhance: false, imagine_aspect_ratio: "1:1" };
 function loadRouteConfig() {
   try {
     const raw = fs.readFileSync(PROXY_MODELS_PATH, 'utf8');
@@ -104,7 +105,7 @@ const WEB_SEARCH = 'web_search';
 // so GLM/Ollama can call them); the proxy fulfills them locally and re-emits
 // completed call+output items to the app instead of letting the app execute.
 const FIND_SKILL_NAME = skillFind.FIND_SKILL;
-const INTERCEPT_NAMES = new Set([WEB_SEARCH, FIND_SKILL_NAME]);
+const INTERCEPT_NAMES = new Set([WEB_SEARCH, FIND_SKILL_NAME, imagine.GENERATE_IMAGE, imagine.PROXY_STATUS]);
 const MAX_STREAM_LOOPS = 6;
 
 // Synthetic function-tool definition for web_search. The native tool arrives as
@@ -447,6 +448,14 @@ function translateRequestBody(body) {
     }
     if (ROUTE_CFG.enable_find_skill && !mapped.some((t) => t && t.type === 'function' && t.name === skillFind.FIND_SKILL)) {
       mapped.push(skillFind.FIND_SKILL_FN);
+      toolsChanged = true;
+    }
+    if (ROUTE_CFG.imagine_enabled && !mapped.some((t) => t && t.type === 'function' && t.name === imagine.GENERATE_IMAGE)) {
+      mapped.push(imagine.GENERATE_IMAGE_FN);
+      toolsChanged = true;
+    }
+    if (ROUTE_CFG.imagine_enabled && !mapped.some((t) => t && t.type === 'function' && t.name === imagine.PROXY_STATUS)) {
+      mapped.push(imagine.PROXY_STATUS_FN);
       toolsChanged = true;
     }
     if (toolsChanged) {
@@ -1075,6 +1084,20 @@ const server = http.createServer((clientReq, clientRes) => {
       } catch (e) {
         log('find_skill proxy loop failed: ' + e.message);
         log('find_skill proxy loop failed; falling through to normal proxy flow');
+      }
+    }
+    if (isResponses && body && ROUTE_CFG.imagine_enabled && (imagine.hasGenerateImageTool(body) || imagine.hasProxyStatusTool(body))) {
+      try {
+        debugLog('imagine proxy loop enabled (generate_image + proxy_status)');
+        const result = await imagine.runGenerateImageLoop({ host: UPSTREAM_HOST, port: UPSTREAM_PORT }, body, ROUTE_CFG, { log: (...a) => debugLog(...a) });
+        const response = result.response;
+        translateFinalResponse(response, info);
+        if (originalStream) sendSseCompleted(clientRes, response);
+        else sendJsonResponse(clientRes, 200, response);
+        return;
+      } catch (e) {
+        log('generate_image proxy loop failed: ' + e.message);
+        log('generate_image proxy loop failed; falling through to normal proxy flow');
       }
     }
     const upstreamHeaders = Object.assign({}, clientReq.headers);
