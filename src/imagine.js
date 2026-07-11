@@ -7,10 +7,8 @@
 // `function` tool so the model can emit function_call{name:"generate_image"};
 // this loop fulfills those calls locally (via Gemini or OpenAI image API) and
 // feeds the results back as function_call_output, then re-runs the model so it
-// can act on the saved image path. Prompt enhancement is done by sending the
-// prompt to the proxy's own Ollama text model with a Subject-Context-Style
-// system prompt. Reference images (image-to-image editing) are supported via
-// the inputImagePath parameter.
+// can act on the saved image path. Reference images (image-to-image editing) are
+// supported via the inputImagePath parameter.
 
 const http = require('http');
 const https = require('https');
@@ -18,7 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const GENERATE_IMAGE = 'generate_image';
+const GENERATE_IMAGE = 'image_gen__imagegen';
 const MAX_LOOPS = 4;
 
 // ── Synthetic function-tool definition ──────────────────────────────────────
@@ -26,13 +24,14 @@ const MAX_LOOPS = 4;
 const GENERATE_IMAGE_FN = {
   type: 'function',
   name: GENERATE_IMAGE,
-  description: 'Generate a new image from a text prompt, or edit an existing ' +
+  description: 'Built-in image generation tool (image_gen / imagegen). Before calling, ' +
+    'use find_skill to search for "imagegen" or "image generation", read the ' +
+    'matched SKILL.md file, and follow its prompt guidance to craft a detailed, ' +
+    'structured prompt. Generate a new image from a text prompt, or edit an existing ' +
     'image. For text-to-image, provide only the prompt. For image editing ' +
-    '(image-to-image), provide both prompt and inputImagePath. The prompt ' +
-    'should describe what you want to create or what changes to make. After ' +
-    'this tool returns a saved image path, do not call view_image unless the ' +
-    'user explicitly asks you to inspect it; respond with the saved path or a ' +
-    'markdown image link.',
+    '(image-to-image), provide both prompt and inputImagePath. After this tool ' +
+    'returns a saved image path, do not call view_image unless the user explicitly ' +
+    'asks you to inspect it; respond with the saved path or a markdown image link.',
   parameters: {
     type: 'object',
     properties: {
@@ -64,43 +63,6 @@ const GENERATE_IMAGE_FN = {
   },
 };
 
-// ── Prompt enhancement system prompts ──────────────────────────────────────
-// Based on the Subject-Context-Style framework from mcp-image (MIT licensed).
-const ENHANCE_SYSTEM_PROMPT = `You are an expert at crafting prompts for image generation models. Your role is to transform user requests into rich, detailed prompts that maximize image generation quality.
-
-Structure your enhancement around three core elements:
-
-1. SUBJECT (What): The main focus of the image
-   - Physical characteristics: textures, materials, colors, scale
-   - Actions, poses, expressions if applicable
-   - Distinctive features that define the subject
-
-2. CONTEXT (Where/When): The environment and conditions
-   - Setting, background, spatial relationships (foreground, midground, background)
-   - Time of day, weather, atmospheric conditions
-   - Mood and emotional tone of the scene
-
-3. STYLE (How): The visual treatment
-   - Artistic or photographic approach: reference specific artists, movements, or styles
-   - Lighting design: direction, quality, color temperature, shadows
-   - Camera/lens choices: specify focal length, aperture, and shooting angle when photographic
-
-Core principles:
-- Add visual details only in areas the user left unspecified; keep all user-specified elements unchanged
-- Focus on what should be present rather than what should be absent
-- Include photographic or artistic terminology when appropriate
-- Maintain clarity while adding richness and specificity
-
-Your output should weave these elements into a single, natural flowing description - not a structured list. Make it vivid, engaging, and unambiguous.`;
-
-const ENHANCE_SYSTEM_PROMPT_EDIT = ENHANCE_SYSTEM_PROMPT + `
-
-IMPORTANT: An input image has been provided. Your task is to:
-1. Analyze the visual context, style, and atmosphere of the input image
-2. Preserve the original image's core characteristics (color palette, lighting style, composition) while applying the requested changes
-3. Focus on maintaining visual consistency - describe modifications relative to the existing image
-4. Be specific about what to keep unchanged vs what to modify
-5. Use phrases like "maintain the existing...", "preserve the original...", "keep the same..." to ensure fidelity to source`;
 
 // ── Security: validate input image path ──────────────────────────────────────
 const ALLOWED_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp']);
@@ -221,39 +183,6 @@ function extractTextFromResponse(response) {
   return null;
 }
 
-// ── Prompt enhancement via Ollama text model ────────────────────────────────
-async function enhancePrompt(upstream, userPrompt, config, systemPrompt, inputImageBase64, inputImageMime) {
-  try {
-    const body = {
-      model: config.text_model,
-      input: inputImageBase64
-        ? [
-            {
-              type: 'message',
-              role: 'user',
-              content: [
-                { type: 'input_image', image_url: 'data:' + inputImageMime + ';base64,' + inputImageBase64 },
-                { type: 'input_text', text: userPrompt },
-              ],
-            },
-          ]
-        : userPrompt,
-      instructions: systemPrompt,
-      stream: false,
-      max_output_tokens: 1000,
-      temperature: 0.7,
-    };
-
-    const response = await postResponses(upstream, body);
-    const text = extractTextFromResponse(response);
-    if (text && text.trim().length > 0) {
-      return text.trim();
-    }
-  } catch (e) {
-    // Enhancement is best-effort; fall back to original prompt.
-  }
-  return userPrompt;
-}
 
 // ── Image backends ──────────────────────────────────────────────────────────
 
@@ -491,22 +420,10 @@ async function fulfillGenerateImage(call, upstream, config, log) {
     }
   }
 
-  // ── Step 1: Enhance prompt (if enabled) ──
-  let enhancedPrompt = prompt;
-  if (config.imagine_enhance) {
-    const systemPrompt = inputImageBase64
-      ? ENHANCE_SYSTEM_PROMPT_EDIT
-      : ENHANCE_SYSTEM_PROMPT;
-    enhancedPrompt = await enhancePrompt(upstream, prompt, config, systemPrompt, inputImageBase64, inputImageMime);
-    if (enhancedPrompt !== prompt) {
-      log('prompt enhanced: "' + prompt.slice(0, 50) + '..." -> "' + enhancedPrompt.slice(0, 50) + '..."');
-    }
-  }
-
-  // ── Step 2: Generate image ──
+  // ── Generate image ──
   let result;
   try {
-    result = await callImageBackend(enhancedPrompt, {
+    result = await callImageBackend(prompt, {
       service: config.imagine_service || 'gemini',
       model: config.imagine_model || '',
       apiKey: config.imagine_api_key || '',
@@ -542,9 +459,6 @@ async function fulfillGenerateImage(call, upstream, config, log) {
     originalPrompt: prompt,
   };
   if (inputImagePath) output.inputImagePath = inputImagePath;
-  if (enhancedPrompt !== prompt) {
-    output.enhancedPrompt = enhancedPrompt;
-  }
   if (result.metadata.revisedPrompt) output.revisedPrompt = result.metadata.revisedPrompt;
 
   return { call_id: call.call_id, output: JSON.stringify(output) };
@@ -702,7 +616,6 @@ function fulfillProxyStatus(call, config, log) {
       imagine_model: config.imagine_model || '(provider default)',
       imagine_api_key: maskedKey,
       imagine_quality: config.imagine_quality || 'fast',
-      imagine_enhance: config.imagine_enhance || false,
       imagine_aspect_ratio: config.imagine_aspect_ratio || '1:1',
     },
     available_commands: {
@@ -719,8 +632,6 @@ function fulfillProxyStatus(call, config, log) {
       imagine_enable: 'codex-ollama-proxy imagine --enable --service gemini|openai --model MODEL --api-key "KEY"',
       imagine_disable: 'codex-ollama-proxy imagine --disable',
       imagine_quality: 'codex-ollama-proxy imagine --quality fast|balanced|quality',
-      imagine_enhance: 'codex-ollama-proxy imagine --enhance',
-      imagine_no_enhance: 'codex-ollama-proxy imagine --no-enhance',
       imagine_aspect_ratio: 'codex-ollama-proxy imagine --aspect-ratio 1:1|16:9|9:16|4:3|3:4',
       imagine_status: 'codex-ollama-proxy imagine --status',
       imagine_doctor: 'codex-ollama-proxy imagine --doctor',

@@ -161,12 +161,14 @@ function makeProxyStatusMarker(call, outputStr) {
   return null;
 }
 
+const { GENERATE_IMAGE } = require('./imagine');
+
 function makeMarker(call, outputStr) {
   // web_search -> web_search_call chip
-  // generate_image -> image_generation_call chip
+  // image_gen__imagegen -> image_generation_call chip
   // ollama_proxy_status -> no chip (fulfilled silently, same as find_skill)
   if (call.name === WEB_SEARCH) return makeWebSearchMarker(call, outputStr);
-  if (call.name === 'generate_image') return makeImageGenerationMarker(call, outputStr);
+  if (call.name === GENERATE_IMAGE) return makeImageGenerationMarker(call, outputStr);
   if (call.name === 'ollama_proxy_status') return makeProxyStatusMarker(call, outputStr);
   return null;
 }

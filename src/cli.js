@@ -32,7 +32,7 @@ function usage() {
   codex-ollama-proxy restart
   codex-ollama-proxy imagine [--enable|--disable] [--service gemini|openai --model MODEL]
   codex-ollama-proxy imagine [--api-key KEY] [--quality fast|balanced|quality]
-  codex-ollama-proxy imagine [--enhance|--no-enhance] [--aspect-ratio RATIO]
+  codex-ollama-proxy imagine [--aspect-ratio RATIO]
   codex-ollama-proxy imagine --status
   codex-ollama-proxy imagine --doctor`);
 }
@@ -61,7 +61,7 @@ function parseFlags(argv) {
     const eq = arg.indexOf('=');
     const key = (eq >= 0 ? arg.slice(2, eq) : arg.slice(2)).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
     if (eq >= 0) flags[key] = arg.slice(eq + 1);
-    else if (['force', 'auto-image', 'no-auto-image', 'enable', 'disable', 'enhance', 'no-enhance', 'doctor', 'status'].includes(arg.slice(2))) flags[key] = true;
+    else if (['force', 'auto-image', 'no-auto-image', 'enable', 'disable', 'doctor', 'status'].includes(arg.slice(2))) flags[key] = true;
     else flags[key] = argv[++i];
   }
   return { flags, rest };
@@ -191,7 +191,7 @@ function imagineCmd(flags) {
   }
   if (flags.status) {
     const text = readRouteConfig();
-    const fields = ["imagine_enabled", "imagine_service", "imagine_api_key", "imagine_quality", "imagine_enhance", "imagine_aspect_ratio"];
+    const fields = ["imagine_enabled", "imagine_service", "imagine_api_key", "imagine_quality", "imagine_aspect_ratio"];
     fields.splice(2, 0, "imagine_model");
     console.log("Image generation configuration:");
     for (const f of fields) {
@@ -219,8 +219,6 @@ function imagineCmd(flags) {
   if (flags.model) text = writeRouteValue(text, "imagine_model", flags.model);
   if (flags.apiKey) text = writeRouteValue(text, "imagine_api_key", flags.apiKey);
   if (flags.quality) text = writeRouteValue(text, "imagine_quality", flags.quality);
-  if (flags.enhance) text = writeRouteValue(text, "imagine_enhance", true);
-  if (flags.noEnhance) text = writeRouteValue(text, "imagine_enhance", false);
   if (flags.aspectRatio) text = writeRouteValue(text, "imagine_aspect_ratio", flags.aspectRatio);
   fs.writeFileSync(ROUTE_CONFIG, text, "utf8");
   console.log("updated=" + ROUTE_CONFIG);
@@ -228,7 +226,7 @@ function imagineCmd(flags) {
 
 function readImagineConfig() {
   const text = readRouteConfig();
-  const cfg = { imagine_enabled: false, imagine_service: "gemini", imagine_model: "", imagine_api_key: "", imagine_quality: "fast", imagine_enhance: false, imagine_aspect_ratio: "1:1", text_model: null };
+  const cfg = { imagine_enabled: false, imagine_service: "gemini", imagine_model: "", imagine_api_key: "", imagine_quality: "fast", imagine_aspect_ratio: "1:1", text_model: null };
   for (const line of text.split("\n")) {
     const m = line.match(/^\s*([A-Za-z_]+)\s*=\s*"([^"]*)"/);
     if (m && m[1] in cfg) cfg[m[1]] = m[2];

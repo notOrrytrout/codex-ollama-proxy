@@ -80,13 +80,6 @@ imagine_api_key = ""
 # Maps to backend-specific settings (Gemini model selection, OpenAI quality).
 imagine_quality = "fast"
 
-# When true, the proxy enhances the prompt before sending it to the image
-# backend by calling the Ollama text model with a Subject-Context-Style system
-# prompt. For image editing (inputImagePath provided), the enhancement includes
-# instructions to preserve the original image's characteristics. This adds one
-# extra round-trip to the Ollama model but produces richer, more detailed
-# prompts. Set to false to pass the raw prompt directly to the image backend.
-imagine_enhance = false
 
 # Default aspect ratio for generated images. The model can override this per
 # call via the aspectRatio parameter. Options: 1:1, 16:9, 9:16, 4:3, 3:4.
