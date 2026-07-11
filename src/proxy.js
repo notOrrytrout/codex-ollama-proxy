@@ -31,7 +31,7 @@ function loadRouteConfig() {
   if (process.env.PROXY_FIND_SKILL === '0') ROUTE_CFG.enable_find_skill = false;
   if (process.env.PROXY_STREAM_LOOP === '1') ROUTE_CFG.stream_proxy_loop = true;
   if (process.env.PROXY_STREAM_LOOP === '0') ROUTE_CFG.stream_proxy_loop = false;
-  log('route config: text=' + ROUTE_CFG.text_model + ' image=' + ROUTE_CFG.image_model + ' auto_route_image=' + ROUTE_CFG.auto_route_image + ' verbose_tools=' + ROUTE_CFG.verbose_tools + ' log_upstream_body=' + ROUTE_CFG.log_upstream_body + ' find_skill=' + ROUTE_CFG.enable_find_skill + ' stream_loop=' + ROUTE_CFG.stream_proxy_loop);
+  log('route config: text=' + ROUTE_CFG.text_model + ' image=' + ROUTE_CFG.image_model + ' auto_route_image=' + ROUTE_CFG.auto_route_image + ' verbose_tools=' + ROUTE_CFG.verbose_tools + ' log_upstream_body=' + ROUTE_CFG.log_upstream_body + ' find_skill=' + ROUTE_CFG.enable_find_skill + ' stream_loop=' + ROUTE_CFG.stream_proxy_loop + ' imagine=' + ROUTE_CFG.imagine_enabled + ' imagine_service=' + ROUTE_CFG.imagine_service);
 }
 loadRouteConfig();
 
@@ -418,11 +418,12 @@ function translateRequestBody(body) {
     });
     if (inputChanged) body.input = newInput;
   }
-  if (Array.isArray(body.tools)) {
+  {
     verboseToolLog('request tools', body.tools);
+    const hasIncomingTools = Array.isArray(body.tools) && body.tools.length > 0;
     let toolsChanged = false;
     const mapped = [];
-    for (const t of body.tools) {
+    for (const t of (Array.isArray(body.tools) ? body.tools : [])) {
       if (t && t.type === WEB_SEARCH) {
         debugLog('native web_search tool shape: ' + JSON.stringify(summarizeToolShape(t)) + ' -> function tool');
         toolsChanged = true;
@@ -446,7 +447,7 @@ function translateRequestBody(body) {
       }
       mapped.push(t);
     }
-    if (ROUTE_CFG.enable_find_skill && !mapped.some((t) => t && t.type === 'function' && t.name === skillFind.FIND_SKILL)) {
+    if (ROUTE_CFG.enable_find_skill && hasIncomingTools && !mapped.some((t) => t && t.type === 'function' && t.name === skillFind.FIND_SKILL)) {
       mapped.push(skillFind.FIND_SKILL_FN);
       toolsChanged = true;
     }
@@ -454,7 +455,7 @@ function translateRequestBody(body) {
       mapped.push(imagine.GENERATE_IMAGE_FN);
       toolsChanged = true;
     }
-    if (ROUTE_CFG.imagine_enabled && !mapped.some((t) => t && t.type === 'function' && t.name === imagine.PROXY_STATUS)) {
+    if (!mapped.some((t) => t && t.type === 'function' && t.name === imagine.PROXY_STATUS)) {
       mapped.push(imagine.PROXY_STATUS_FN);
       toolsChanged = true;
     }
@@ -1089,7 +1090,7 @@ const server = http.createServer((clientReq, clientRes) => {
         log('request body parse/translate failed: ' + e.message + ' (passing through)');
       }
     }
-    if (isResponses && body && (webSearch.hasNativeWebSearchTool(body) || (ROUTE_CFG.imagine_enabled && (imagine.hasGenerateImageTool(body) || imagine.hasProxyStatusTool(body))) || (ROUTE_CFG.enable_find_skill && skillFind.hasFindSkillTool(body)))) {
+    if (isResponses && body && (webSearch.hasNativeWebSearchTool(body) || imagine.hasProxyStatusTool(body) || (ROUTE_CFG.imagine_enabled && imagine.hasGenerateImageTool(body)) || (ROUTE_CFG.enable_find_skill && skillFind.hasFindSkillTool(body)))) {
       if (originalStream && ROUTE_CFG.stream_proxy_loop) {
         try {
           debugLog('streaming proxy loop enabled');
@@ -1099,6 +1100,30 @@ const server = http.createServer((clientReq, clientRes) => {
           log('streaming proxy loop failed: ' + e.message + '; falling through to non-streaming loop');
           if (clientRes.headersSent) { clientRes.end(); return; }
           // else fall through to the non-streaming loop below
+        }
+      }
+      if (!webSearch.hasNativeWebSearchTool(body) && (imagine.hasProxyStatusTool(body) || (ROUTE_CFG.imagine_enabled && imagine.hasGenerateImageTool(body)))) {
+        try {
+          debugLog('imagine proxy loop enabled (generate_image + proxy_status)');
+          const result = await imagine.runGenerateImageLoop({ host: UPSTREAM_HOST, port: UPSTREAM_PORT }, body, ROUTE_CFG, { log: (...a) => debugLog(...a) });
+          const response = result.response;
+          translateFinalResponse(response, info);
+          if (originalStream) sendSseCompleted(clientRes, response);
+          else sendJsonResponse(clientRes, 200, response);
+          return;
+        } catch (e) {
+          log('imagine proxy loop failed: ' + e.message);
+          if (!clientRes.headersSent) {
+            sendJsonResponse(clientRes, 502, {
+              error: {
+                message: 'proxy imagine failed: ' + e.message,
+                type: 'proxy_imagine_error',
+              },
+            });
+          } else {
+            clientRes.end();
+          }
+          return;
         }
       }
       try {
