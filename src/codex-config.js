@@ -32,6 +32,13 @@ const TOOL_CAPABILITY_FIELDS = [
   'use_responses_lite',
 ];
 
+const FRESH_INSTRUCTION_FIELDS = [
+  'base_instructions',
+  'model_messages',
+  'include_skills_usage_instructions',
+  'experimental_supported_tools',
+];
+
 const HARDCODED_CANONICAL = {
   apply_patch_tool_type: 'freeform',
   supports_parallel_tool_calls: true,
@@ -349,6 +356,45 @@ function canonicalToolValues() {
   return { ...HARDCODED_CANONICAL };
 }
 
+function canonicalInstructionValuesFromCache(cacheData) {
+  const models = cacheData && Array.isArray(cacheData.models) ? cacheData.models : [];
+  const source = models.find((m) => m && (m.base_instructions || m.model_messages)) || null;
+  if (!source) return {};
+  const out = {};
+  for (const key of FRESH_INSTRUCTION_FIELDS) {
+    if (source[key] !== undefined) out[key] = JSON.parse(JSON.stringify(source[key]));
+  }
+  return out;
+}
+
+function canonicalInstructionValues() {
+  if (!exists(MODELS_CACHE)) return {};
+  try {
+    return canonicalInstructionValuesFromCache(JSON.parse(readText(MODELS_CACHE)));
+  } catch {
+    return {};
+  }
+}
+
+function applyFreshInstructionValues(catalog, instructionValues) {
+  const models = catalog && Array.isArray(catalog.models) ? catalog.models : [];
+  const keys = Object.keys(instructionValues || {});
+  if (!models.length || !keys.length) return 0;
+  let changed = 0;
+  for (const model of models) {
+    if (!model) continue;
+    let modelChanged = false;
+    for (const key of keys) {
+      const next = instructionValues[key];
+      if (JSON.stringify(model[key]) === JSON.stringify(next)) continue;
+      model[key] = JSON.parse(JSON.stringify(next));
+      modelChanged = true;
+    }
+    if (modelChanged) changed += 1;
+  }
+  return changed;
+}
+
 async function fetchJson(url, timeoutMs = 5000, body = null) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -404,6 +450,7 @@ async function refreshCatalog() {
   if (!catalog || Array.isArray(catalog)) catalog = { models };
 
   const canonical = canonicalToolValues();
+  const freshInstructions = canonicalInstructionValues();
   const local = await localOllamaModels();
   const existingSlugs = new Set(models.map((m) => m && m.slug).filter(Boolean));
   const template = models.length ? JSON.parse(JSON.stringify(models[0])) : {};
@@ -451,6 +498,7 @@ async function refreshCatalog() {
   }
 
   catalog.models = models;
+  const instructionsPatched = applyFreshInstructionValues(catalog, freshInstructions);
   const routePatch = forceImageCapabilityForRouteModel(catalog);
   const backup = makeBackupOf(MODEL_CATALOG, 'refresh');
   const renderedCatalog = JSON.stringify(catalog, null, 2) + '\n';
@@ -462,6 +510,7 @@ async function refreshCatalog() {
     `backup=${backup}`,
     `canonical_source=${exists(MODELS_CACHE) ? 'models_cache.json' : 'hardcoded defaults'}`,
     `canonical=${pythonishDict(canonical)}`,
+    `instructions_patched=${instructionsPatched}`,
     `models_patched=${changed}`,
     `models_added=${added.length}`,
     `auto_route_image=${routePatch.routeCfg.auto_route_image ? 'true' : 'false'}`,
@@ -565,7 +614,17 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-main().catch((error) => {
-  console.error(error.message || String(error));
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error.message || String(error));
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  FRESH_INSTRUCTION_FIELDS,
+  canonicalInstructionValuesFromCache,
+  applyFreshInstructionValues,
+  refreshCatalog,
+  main,
+};

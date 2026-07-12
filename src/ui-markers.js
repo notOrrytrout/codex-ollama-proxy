@@ -1,5 +1,7 @@
 'use strict';
 
+const fs = require('fs');
+
 // proxy_ui_markers.js
 //
 // Synthetic UI marker for the proxy-fulfilled `web_search` tool.
@@ -54,6 +56,20 @@ function emitOutputItem(clientRes, item, seq) {
   });
 }
 
+function emitOutputItemAdded(clientRes, item, seq) {
+  const idx = seq.index++;
+  writeSseEvent(clientRes, 'response.output_item.added', {
+    type: 'response.output_item.added', output_index: idx, sequence_number: seq.num++, item,
+  });
+  return idx;
+}
+
+function emitOutputItemDoneAt(clientRes, item, outputIndex, seq) {
+  writeSseEvent(clientRes, 'response.output_item.done', {
+    type: 'response.output_item.done', output_index: outputIndex, sequence_number: seq.num++, item,
+  });
+}
+
 // Build the { callItem, outputItem } marker pair for a fulfilled call.
 // `web_search` -> web_search_call + web_search_output (matching the shape
 // proxy.js emits for a passthrough web_search call). `find_skill` -> tool_search_call
@@ -89,12 +105,69 @@ function makeWebSearchMarker(call, outputStr) {
   return item;
 }
 
+function makeImageGenerationMarker(call, outputStr) {
+  // Build the native image_generation_call item (matching the shape
+  // ResponseItem::ImageGenerationCall in the Codex Rust server).
+  // Fields: id, status, revised_prompt, result, saved_path.
+  // The app renders an "Image generated" chip from saved_path + revised_prompt.
+  let parsed = {};
+  try { parsed = JSON.parse(outputStr); } catch {}
+
+  const item = {
+    type: 'image_generation_call',
+    status: outputStr && outputStr.startsWith('[generate_image error]') ? 'failed' : 'completed',
+  };
+  if (call.id) item.id = call.id;
+  if (parsed.enhancedPrompt) item.revised_prompt = parsed.enhancedPrompt;
+  else if (parsed.revisedPrompt) item.revised_prompt = parsed.revisedPrompt;
+  else if (parsed.originalPrompt) item.revised_prompt = parsed.originalPrompt;
+  else {
+    const args = parseArgs(call.arguments);
+    if (args.prompt) item.revised_prompt = String(args.prompt);
+  }
+  if (parsed.path) item.saved_path = parsed.path;
+  // ResponseItem::ImageGenerationCall has a string `result`; the app-server's
+  // ThreadItem::ImageGeneration normalizer accepts data URLs, URLs, paths, or
+  // bare base64. Include a data URL here to test whether Rust bridges provider
+  // image_generation_call items into UI imageGeneration items.
+  if (parsed.path) {
+    try {
+      const mime = parsed.mimeType || 'image/png';
+      item.result = 'data:' + mime + ';base64,' + fs.readFileSync(parsed.path).toString('base64');
+    } catch (e) {
+      item.result = parsed.path;
+    }
+  } else if (typeof parsed.result === 'string') {
+    item.result = parsed.result;
+  }
+  return item;
+}
+
+function makeImageGenerationStartedMarker(call) {
+  const args = parseArgs(call.arguments);
+  const item = {
+    type: 'image_generation_call',
+    status: 'in_progress',
+  };
+  if (call.id) item.id = call.id;
+  if (args.prompt) item.revised_prompt = String(args.prompt);
+  return item;
+}
+
+function makeProxyStatusMarker(call, outputStr) {
+  // ollama_proxy_status is fulfilled silently — no renderable chip in the Codex app.
+  // The result is fed back to the model as function_call_output but no marker
+  // is emitted to the UI (same as find_skill).
+  return null;
+}
+
 function makeMarker(call, outputStr) {
-  // Only web_search has a renderable marker. find_skill is fulfilled silently
-  // (no chip exists for it in the Codex app), so makeMarker returns null for it
-  // and runStreamingLoop skips marker emission while still feeding the result
-  // back to the model.
+  // web_search -> web_search_call chip
+  // generate_image -> image_generation_call chip
+  // ollama_proxy_status -> no chip (fulfilled silently, same as find_skill)
   if (call.name === WEB_SEARCH) return makeWebSearchMarker(call, outputStr);
+  if (call.name === 'generate_image') return makeImageGenerationMarker(call, outputStr);
+  if (call.name === 'ollama_proxy_status') return makeProxyStatusMarker(call, outputStr);
   return null;
 }
 
@@ -110,7 +183,12 @@ function injectMarkersIntoCompleted(completedEvent, markerItems) {
 module.exports = {
   writeSseEvent,
   emitOutputItem,
+  emitOutputItemAdded,
+  emitOutputItemDoneAt,
   makeMarker,
   makeWebSearchMarker,
+  makeImageGenerationStartedMarker,
+  makeImageGenerationMarker,
+  makeProxyStatusMarker,
   injectMarkersIntoCompleted,
 };

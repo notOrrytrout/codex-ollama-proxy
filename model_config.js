@@ -1,4 +1,4 @@
 #!/usr/bin/env node
 'use strict';
 
-require('./src/codex-config');
+require('./src/codex-config').main();

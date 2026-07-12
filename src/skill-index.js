@@ -10,7 +10,8 @@
 //      ([plugins.name@set] enabled = true). The plugin name (from the
 //      plugin plugin.json) is stored per skill.
 //   2. User skills    -> ~/.codex/skills/<name>/SKILL.md (always on).
-//   3. System skills  -> ~/.codex/skills/.system/<name>/SKILL.md (always on).
+//   3. Agent skills   -> ~/.agents/skills/<name>/SKILL.md (always on unless disabled).
+//   4. System skills  -> ~/.codex/skills/.system/<name>/SKILL.md (always on).
 //
 // Each index entry is { skill_name, plugin_name, description, path, scope }.
 // Ranking weights (by design): plugin-name direct match is the highest signal,
@@ -18,10 +19,13 @@
 
 const fs = require('fs');
 const path = require('path');
+const codexAppServerSkills = require('./codex-app-server-skills');
 
-const CODEX_DIR = path.resolve(__dirname, '../..'); // ~/.codex
+const CODEX_DIR = process.env.CODEX_HOME || path.join(process.env.HOME, '.codex');
 const SKILLS_DIR = path.join(CODEX_DIR, 'skills');
 const SYSTEM_SKILLS_DIR = path.join(SKILLS_DIR, '.system');
+const AGENTS_SKILLS_DIR = process.env.CODEX_AGENTS_SKILLS_DIR ||
+  path.join(path.dirname(CODEX_DIR), '.agents', 'skills');
 const PLUGINS_CACHE_DIR = path.join(CODEX_DIR, 'plugins', 'cache');
 const CONFIG_TOML = path.join(CODEX_DIR, 'config.toml');
 
@@ -71,32 +75,85 @@ function readSkill(skillMdPath) {
   return { skill_name: name, description, path: skillMdPath };
 }
 
-// Parse config.toml just for the [plugins.name@set] blocks with enabled=true.
-function parseEnabledPlugins(tomlPath) {
+// Parse config.toml just for top-level [plugins.name@set] blocks with
+// enabled=true/false. Nested plugin tool config tables intentionally do not
+// match this parser.
+function parsePluginEnablement(tomlPath) {
   const raw = readTextSafe(tomlPath);
-  if (!raw) return [];
-  const enabled = [];
+  if (!raw) return new Map();
+  const states = new Map();
   const lines = raw.split(/\r?\n/);
-  let current = null; // { id, seenEnabled }
+  let current = null; // { id, enabled }
   for (const line of lines) {
     const hdr = /^\s*\[plugins\.(?:'([^']+)'|"([^"]+)"|([^\]]+))\]/.exec(line);
     if (hdr) {
-      if (current && current.seenEnabled) enabled.push(current.id);
+      if (current && current.enabled != null) states.set(current.id, current.enabled);
       const id = hdr[1] || hdr[2] || hdr[3];
-      current = id ? { id: id.trim(), seenEnabled: false } : null;
+      current = id ? { id: id.trim(), enabled: null } : null;
       continue;
     }
     if (/^\s*\[[^\]]+\]\s*$/.test(line)) {
-      if (current && current.seenEnabled) enabled.push(current.id);
+      if (current && current.enabled != null) states.set(current.id, current.enabled);
       current = null;
       continue;
     }
-    if (current && /^\s*enabled\s*=\s*true\b/i.test(line)) {
-      current.seenEnabled = true;
+    if (current) {
+      const m = /^\s*enabled\s*=\s*(true|false)\b/i.exec(line);
+      if (m) current.enabled = m[1].toLowerCase() === 'true';
     }
   }
-  if (current && current.seenEnabled) enabled.push(current.id);
-  return enabled;
+  if (current && current.enabled != null) states.set(current.id, current.enabled);
+  return states;
+}
+
+function parseEnabledPlugins(tomlPath) {
+  return Array.from(parsePluginEnablement(tomlPath).entries())
+    .filter(([, enabled]) => enabled === true)
+    .map(([id]) => id);
+}
+
+function parseDisabledSkillConfig(tomlPath) {
+  const raw = readTextSafe(tomlPath);
+  const disabled = { names: new Set(), paths: new Set() };
+  if (!raw) return disabled;
+  const lines = raw.split(/\r?\n/);
+  let current = null; // { name, path, enabled }
+  const addCurrent = () => {
+    if (!current || current.enabled !== false) return;
+    if (current.name) disabled.names.add(current.name);
+    if (current.path) disabled.paths.add(path.resolve(current.path));
+  };
+  for (const line of lines) {
+    if (/^\s*\[\[skills\.config\]\]\s*$/.test(line)) {
+      addCurrent();
+      current = { name: null, path: null, enabled: null };
+      continue;
+    }
+    if (/^\s*\[/.test(line) && !/^\s*\[\[skills\.config\]\]\s*$/.test(line)) {
+      addCurrent();
+      current = null;
+      continue;
+    }
+    if (!current) continue;
+    const name = /^\s*name\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s#]+))/.exec(line);
+    if (name) {
+      current.name = (name[1] || name[2] || name[3] || '').trim();
+      continue;
+    }
+    const skillPath = /^\s*path\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s#]+))/.exec(line);
+    if (skillPath) {
+      current.path = (skillPath[1] || skillPath[2] || skillPath[3] || '').trim();
+      continue;
+    }
+    const enabled = /^\s*enabled\s*=\s*(true|false)\b/i.exec(line);
+    if (enabled) current.enabled = enabled[1].toLowerCase() === 'true';
+  }
+  addCurrent();
+  return disabled;
+}
+
+function parseDisabledSkills(tomlPath) {
+  return parseDisabledSkillConfig(tomlPath).names;
 }
 
 function splitPluginId(id) {
@@ -136,30 +193,64 @@ function pickLatestVersionDir(setDir) {
   return path.join(setDir, dirs[0]);
 }
 
-function indexUserSkills(entries) {
-  for (const dir of listDirs(SKILLS_DIR)) {
+function discoverInstalledPluginIds() {
+  const ids = new Set(parseEnabledPlugins(CONFIG_TOML));
+  const explicitStates = parsePluginEnablement(CONFIG_TOML);
+  let sets = [];
+  try { sets = fs.readdirSync(PLUGINS_CACHE_DIR, { withFileTypes: true }); } catch { return Array.from(ids); }
+  for (const setEnt of sets) {
+    if (!setEnt.isDirectory()) continue;
+    const setName = setEnt.name;
+    const setDir = path.join(PLUGINS_CACHE_DIR, setName);
+    let plugins = [];
+    try { plugins = fs.readdirSync(setDir, { withFileTypes: true }); } catch { continue; }
+    for (const pluginEnt of plugins) {
+      if (!pluginEnt.isDirectory()) continue;
+      const pluginName = pluginEnt.name;
+      const id = pluginName + '@' + setName;
+      if (explicitStates.get(id) === false) continue;
+      const installMarker = path.join(setDir, pluginName, '.codex-remote-plugin-install.json');
+      if (fs.existsSync(installMarker)) ids.add(id);
+    }
+  }
+  return Array.from(ids);
+}
+
+function filterDisabledSkills(entries) {
+  const disabled = parseDisabledSkillConfig(CONFIG_TOML);
+  if (disabled.names.size === 0 && disabled.paths.size === 0) return entries;
+  return entries.filter((entry) => {
+    if (disabled.names.has(entry.skill_name)) return false;
+    if (entry.path && disabled.paths.has(path.resolve(entry.path))) return false;
+    return true;
+  });
+}
+
+function indexSkillRoot(entries, skillsDir, scope) {
+  for (const dir of listDirs(skillsDir)) {
     const s = readSkill(path.join(dir, 'SKILL.md'));
     if (!s) continue;
     entries.push({
       skill_name: s.skill_name, plugin_name: '', description: s.description,
-      path: s.path, scope: 'user',
+      path: s.path, scope,
     });
   }
+}
+
+function indexUserSkills(entries) {
+  indexSkillRoot(entries, SKILLS_DIR, 'user');
+}
+
+function indexAgentSkills(entries) {
+  indexSkillRoot(entries, AGENTS_SKILLS_DIR, 'user');
 }
 
 function indexSystemSkills(entries) {
-  for (const dir of listDirs(SYSTEM_SKILLS_DIR)) {
-    const s = readSkill(path.join(dir, 'SKILL.md'));
-    if (!s) continue;
-    entries.push({
-      skill_name: s.skill_name, plugin_name: '', description: s.description,
-      path: s.path, scope: 'system',
-    });
-  }
+  indexSkillRoot(entries, SYSTEM_SKILLS_DIR, 'system');
 }
 
 function indexPluginSkills(entries) {
-  const enabled = parseEnabledPlugins(CONFIG_TOML);
+  const enabled = discoverInstalledPluginIds();
   for (const id of enabled) {
     const parts = splitPluginId(id);
     const pluginRoot = pickLatestVersionDir(path.join(PLUGINS_CACHE_DIR, parts.set, parts.name));
@@ -170,8 +261,9 @@ function indexPluginSkills(entries) {
     for (const dir of listDirs(skillsDir)) {
       const s = readSkill(path.join(dir, 'SKILL.md'));
       if (!s) continue;
+      const skillName = s.skill_name.includes(':') ? s.skill_name : pluginName + ':' + s.skill_name;
       entries.push({
-        skill_name: s.skill_name, plugin_name: pluginName, description: s.description,
+        skill_name: skillName, plugin_name: pluginName, description: s.description,
         path: s.path, scope: 'plugin',
       });
     }
@@ -179,11 +271,15 @@ function indexPluginSkills(entries) {
 }
 
 function buildEntries() {
+  const appServerEntries = codexAppServerSkills.buildEntriesFromAppServer();
+  if (appServerEntries.length > 0) return appServerEntries;
+
   const entries = [];
   indexUserSkills(entries);
+  indexAgentSkills(entries);
   indexSystemSkills(entries);
   indexPluginSkills(entries);
-  return entries;
+  return filterDisabledSkills(entries);
 }
 
 function getEntries(force) {
@@ -257,6 +353,42 @@ function searchSkills(query, opts) {
   return scored.slice(0, limit);
 }
 
+function skillRoot(entry) {
+  const p = String(entry && entry.path || '');
+  if (p.includes('/.codex/skills/.system/')) return 'system';
+  if (p.includes('/.agents/skills/')) return 'agents';
+  if (p.includes('/.codex/skills/')) return 'user';
+  if (entry && entry.plugin_name) return 'plugin';
+  return 'other';
+}
+
+function normalizePluginFilter(plugin) {
+  const value = String(plugin || '').trim();
+  if (!value || value === '*') return null;
+  if (['none', 'builtin', 'built-in', 'local'].includes(value.toLowerCase())) return '';
+  return value;
+}
+
+function listSkills(opts) {
+  const entries = getEntries(opts && opts.force);
+  const pluginFilter = normalizePluginFilter(opts && opts.plugin);
+  const scopeFilter = String((opts && opts.scope) || '').trim();
+  const rootFilter = String((opts && opts.root) || '').trim();
+  const limitRaw = Number(opts && opts.limit);
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(500, Math.floor(limitRaw)) : 200;
+
+  return entries
+    .filter((entry) => pluginFilter == null || String(entry.plugin_name || '') === pluginFilter)
+    .filter((entry) => !scopeFilter || String(entry.scope || '') === scopeFilter)
+    .filter((entry) => !rootFilter || skillRoot(entry) === rootFilter)
+    .sort((a, b) => {
+      const pa = String(a.plugin_name || '');
+      const pb = String(b.plugin_name || '');
+      return pa.localeCompare(pb) || String(a.skill_name || '').localeCompare(String(b.skill_name || ''));
+    })
+    .slice(0, limit);
+}
+
 function formatSkillMatches(matches) {
   if (!matches || matches.length === 0) return '[find_skill] No matching skills found.';
   const lines = ['[find_skill] top ' + matches.length + ' skill match(es):'];
@@ -272,11 +404,62 @@ function formatSkillMatches(matches) {
   return lines.join('\n');
 }
 
+function summarizeSkills(entries) {
+  const summary = {
+    type: 'skills_summary',
+    total_enabled_skills: 0,
+    by_plugin: {},
+    by_scope: {},
+  };
+  for (const entry of entries || []) {
+    summary.total_enabled_skills += 1;
+    const plugin = entry.plugin_name || 'none';
+    const scope = entry.scope || 'unknown';
+    summary.by_plugin[plugin] = (summary.by_plugin[plugin] || 0) + 1;
+    summary.by_scope[scope] = (summary.by_scope[scope] || 0) + 1;
+  }
+  summary.by_plugin = Object.fromEntries(
+    Object.entries(summary.by_plugin).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+  );
+  summary.by_scope = Object.fromEntries(
+    Object.entries(summary.by_scope).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+  );
+  return summary;
+}
+
+function formatSkillSummary(entries) {
+  return JSON.stringify(summarizeSkills(entries), null, 2);
+}
+
+function formatSkillList(entries, filters) {
+  const skills = (entries || []).map((entry) => ({
+    skill_name: entry.skill_name,
+    plugin_name: entry.plugin_name || '',
+    scope: entry.scope || '',
+    root: skillRoot(entry),
+    path: entry.path,
+    description: entry.description || '',
+  }));
+  return JSON.stringify({
+    type: 'skills_list',
+    total_enabled_skills: skills.length,
+    filters: filters || {},
+    skills,
+  }, null, 2);
+}
+
 module.exports = {
   CODEX_DIR,
+  AGENTS_SKILLS_DIR,
   getEntries,
   buildEntries,
   searchSkills,
+  listSkills,
   formatSkillMatches,
+  summarizeSkills,
+  formatSkillSummary,
+  formatSkillList,
   parseEnabledPlugins,
+  parseDisabledSkillConfig,
+  parseDisabledSkills,
 };

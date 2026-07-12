@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const webSearch = require('./web-search');
 const skillFind = require('./skill-find');
+const imagine = require('./imagine');
 const markers = require('./ui-markers');
 
 // proxy-models.toml drives per-request model auto-routing.
@@ -13,7 +14,7 @@ const CODEX_DIR = process.env.CODEX_HOME || path.join(process.env.HOME, '.codex'
 const RUNTIME_DIR = path.join(CODEX_DIR, 'ollama-shape-proxy');
 const PROXY_MODELS_PATH = path.join(RUNTIME_DIR, 'proxy-models.toml');
 const UPSTREAM_BODY_LOG = path.join(RUNTIME_DIR, 'upstream-bodies.jsonl');
-const ROUTE_CFG = { text_model: null, image_model: null, auto_route_image: false, verbose_tools: false, log_upstream_body: false, enable_find_skill: false, stream_proxy_loop: true };
+const ROUTE_CFG = { text_model: null, image_model: null, auto_route_image: false, verbose_tools: false, log_upstream_body: false, enable_find_skill: false, stream_proxy_loop: true, imagine_enabled: false, imagine_service: "gemini", imagine_model: "", imagine_api_key: "", imagine_quality: "fast", imagine_enhance: false, imagine_aspect_ratio: "1:1" };
 function loadRouteConfig() {
   try {
     const raw = fs.readFileSync(PROXY_MODELS_PATH, 'utf8');
@@ -30,7 +31,7 @@ function loadRouteConfig() {
   if (process.env.PROXY_FIND_SKILL === '0') ROUTE_CFG.enable_find_skill = false;
   if (process.env.PROXY_STREAM_LOOP === '1') ROUTE_CFG.stream_proxy_loop = true;
   if (process.env.PROXY_STREAM_LOOP === '0') ROUTE_CFG.stream_proxy_loop = false;
-  log('route config: text=' + ROUTE_CFG.text_model + ' image=' + ROUTE_CFG.image_model + ' auto_route_image=' + ROUTE_CFG.auto_route_image + ' verbose_tools=' + ROUTE_CFG.verbose_tools + ' log_upstream_body=' + ROUTE_CFG.log_upstream_body + ' find_skill=' + ROUTE_CFG.enable_find_skill + ' stream_loop=' + ROUTE_CFG.stream_proxy_loop);
+  log('route config: text=' + ROUTE_CFG.text_model + ' image=' + ROUTE_CFG.image_model + ' auto_route_image=' + ROUTE_CFG.auto_route_image + ' verbose_tools=' + ROUTE_CFG.verbose_tools + ' log_upstream_body=' + ROUTE_CFG.log_upstream_body + ' find_skill=' + ROUTE_CFG.enable_find_skill + ' stream_loop=' + ROUTE_CFG.stream_proxy_loop + ' imagine=' + ROUTE_CFG.imagine_enabled + ' imagine_service=' + ROUTE_CFG.imagine_service);
 }
 loadRouteConfig();
 
@@ -104,7 +105,7 @@ const WEB_SEARCH = 'web_search';
 // so GLM/Ollama can call them); the proxy fulfills them locally and re-emits
 // completed call+output items to the app instead of letting the app execute.
 const FIND_SKILL_NAME = skillFind.FIND_SKILL;
-const INTERCEPT_NAMES = new Set([WEB_SEARCH, FIND_SKILL_NAME]);
+const INTERCEPT_NAMES = new Set([WEB_SEARCH, FIND_SKILL_NAME, imagine.GENERATE_IMAGE, imagine.PROXY_STATUS]);
 const MAX_STREAM_LOOPS = 6;
 
 // Synthetic function-tool definition for web_search. The native tool arrives as
@@ -308,6 +309,23 @@ function translateInputItem(item) {
         ...(item.id ? { id: item.id } : {}),
       };
     }
+    case 'image_generation_call': {
+      verboseToolLog('request input image_generation_call', item);
+      const bits = [];
+      const status = item.status ? String(item.status) : '';
+      if (status) bits.push('status=' + status);
+      if (item.revised_prompt) bits.push('prompt=' + String(item.revised_prompt));
+      if (item.saved_path) bits.push('saved_path=' + String(item.saved_path));
+      if (item.result && !item.saved_path) bits.push('result=' + String(item.result).slice(0, 200));
+      return {
+        type: 'message',
+        role: 'assistant',
+        content: [{
+          type: 'output_text',
+          text: '[image_generation_call] ' + (bits.length ? bits.join(' ') : 'completed'),
+        }],
+      };
+    }
     case 'custom_tool_call': {
       verboseToolLog('request input custom_tool_call', item);
       return {
@@ -348,14 +366,15 @@ function collectCustomToolInfo(tools) {
   return { customNames };
 }
 
-// Detect whether any input message carries an image content block.
-// Handles both the Responses-API shape (content: [{type:'input_image',...}])
-// and a plain string content (no image possible there).
+// Detect whether any input message carries actual image content.
+// A historical view_image function_call is not enough by itself: after the app
+// executes view_image, the follow-up turn may only need to summarize or return
+// the generated image path. Routing those turns to the vision model has caused
+// the stream to hang, so only route when image content is present.
 function requestHasImage(body) {
   if (!body || !Array.isArray(body.input)) return false;
   for (const item of body.input) {
     if (!item || typeof item !== 'object') continue;
-    if (item.type === 'function_call' && item.name === 'view_image') return true;
     const content = item.content;
     if (Array.isArray(content)) {
       for (const block of content) {
@@ -402,6 +421,7 @@ function applyModelRouting(body) {
 
 function translateRequestBody(body) {
   if (!body || typeof body !== 'object') return body;
+  liftAdditionalToolsInput(body);
   // Learn namespace/tool splits from the request tools (upfront tools) and
   // from tool_search_output items (deferred tools surfaced by tool_search).
   if (Array.isArray(body.tools)) ingestNamespaces(body.tools);
@@ -416,11 +436,12 @@ function translateRequestBody(body) {
     });
     if (inputChanged) body.input = newInput;
   }
-  if (Array.isArray(body.tools)) {
+  {
     verboseToolLog('request tools', body.tools);
+    const hasIncomingTools = Array.isArray(body.tools) && body.tools.length > 0;
     let toolsChanged = false;
     const mapped = [];
-    for (const t of body.tools) {
+    for (const t of (Array.isArray(body.tools) ? body.tools : [])) {
       if (t && t.type === WEB_SEARCH) {
         debugLog('native web_search tool shape: ' + JSON.stringify(summarizeToolShape(t)) + ' -> function tool');
         toolsChanged = true;
@@ -448,6 +469,18 @@ function translateRequestBody(body) {
       mapped.push(skillFind.FIND_SKILL_FN);
       toolsChanged = true;
     }
+    if (!mapped.some((t) => t && ((t.type === 'function' && t.name === WEB_SEARCH) || t.type === WEB_SEARCH))) {
+      mapped.push(WEB_SEARCH_FN);
+      toolsChanged = true;
+    }
+    if (ROUTE_CFG.imagine_enabled && !mapped.some((t) => t && t.type === 'function' && t.name === imagine.GENERATE_IMAGE)) {
+      mapped.push(imagine.GENERATE_IMAGE_FN);
+      toolsChanged = true;
+    }
+    if (!mapped.some((t) => t && t.type === 'function' && t.name === imagine.PROXY_STATUS)) {
+      mapped.push(imagine.PROXY_STATUS_FN);
+      toolsChanged = true;
+    }
     if (toolsChanged) {
       body.tools = mapped;
       debugLog('rewrote request tools for Ollama-compatible function surface');
@@ -455,6 +488,41 @@ function translateRequestBody(body) {
   }
   if (inputChanged) debugLog('translated request input items');
   return body;
+}
+
+// Newer Codex app-server builds send turn-local tool definitions as an input
+// item: {type:"additional_tools", role:"developer", tools:[...]}.
+// Ollama-compatible /v1/responses endpoints do not accept that input item, but
+// they do accept the same definitions in the top-level tools array. Lift them
+// before the rest of the normal tool translation runs.
+function liftAdditionalToolsInput(body) {
+  if (!body || !Array.isArray(body.input)) return false;
+  const lifted = [];
+  const keptInput = [];
+  let changed = false;
+
+  for (const item of body.input) {
+    if (item && item.type === 'additional_tools' && Array.isArray(item.tools)) {
+      lifted.push(...item.tools);
+      changed = true;
+      const residual = {};
+      if (item.role) residual.role = item.role;
+      if (item.content !== undefined) residual.content = item.content;
+      if (Object.keys(residual).length > 1 || residual.content !== undefined) {
+        keptInput.push(residual);
+      }
+      continue;
+    }
+    keptInput.push(item);
+  }
+
+  if (!changed) return false;
+  body.input = keptInput;
+  if (lifted.length) {
+    body.tools = Array.isArray(body.tools) ? [...body.tools, ...lifted] : lifted;
+    debugLog('lifted additional_tools input item(s) into top-level tools: +' + lifted.length);
+  }
+  return true;
 }
 
 // --- response-side: Ollama -> Codex ---
@@ -577,6 +645,42 @@ function translateOutputItem(item, state) {
     if (item.id) { out.id = item.id; state.rewrittenIds.add(item.id); }
     if (item.status) out.status = item.status;
     debugLog('response: function_call -> web_search_call (call_id=' + item.call_id + ')');
+    return out;
+  }
+  if (item.type === 'function_call' && item.name === imagine.GENERATE_IMAGE) {
+    // generate_image -> image_generation_call (native Codex server item type).
+    // The proxy fulfills generate_image locally; this translation handles the
+    // non-streaming path where the function_call appears in the final response.
+    // Fields match ResponseItem::ImageGenerationCall in the Rust server:
+    // id, status, revised_prompt, result, saved_path.
+    let parsedOutput = {};
+    try {
+      // The output was fed back as function_call_output in the loop; we can't
+      // access it here, so we build a minimal item from the call args.
+    } catch {}
+    const args = parseArgsObject(item.arguments);
+    const out = {
+      type: 'image_generation_call',
+      status: 'completed',
+    };
+    if (item.call_id !== undefined) out.call_id = item.call_id;
+    if (item.id) { out.id = item.id; state.rewrittenIds.add(item.id); }
+    if (args.prompt) out.revised_prompt = args.prompt;
+    debugLog('response: function_call -> image_generation_call (call_id=' + item.call_id + ')');
+    return out;
+  }
+  if (item.type === 'function_call' && item.name === imagine.PROXY_STATUS) {
+    // ollama_proxy_status is fulfilled silently; translate to a no-op item so the
+    // app-server doesn't try to execute it as a pending function_call.
+    const out = {
+      type: 'function_call',
+      call_id: item.call_id,
+      name: item.name,
+      arguments: item.arguments || '{}',
+      status: 'completed',
+    };
+    if (item.id) { out.id = item.id; state.rewrittenIds.add(item.id); }
+    debugLog('response: ollama_proxy_status function_call marked completed (call_id=' + item.call_id + ')');
     return out;
   }
   if (item.type === 'function_call' && item.name && state.customNames.has(item.name)) {
@@ -713,13 +817,15 @@ function postUpstreamStream(upstream, body) {
 // function_call items (web_search / find_skill) and buffering the terminal
 // response.completed event. Returns the intercepted calls and the buffered
 // completed event so the caller can fulfill + continue or finalize.
-function pipeAndCollect(upstreamRes, clientRes, customNames, allowLifecycle) {
+function pipeAndCollect(upstreamRes, clientRes, customNames, allowLifecycle, outputIndexOffset, sequenceNumberOffset) {
   const state = { rewrittenIds: new Set(), customNames };
   const suppressed = new Set();          // item ids we are intercepting
   const pending = new Map();             // id -> { id, call_id, name, arguments }
   const interceptedCalls = [];
   let completedEvent = null;
   let leftover = '';
+  let maxOutputIndex = -1;
+  let maxSequenceNumber = -1;
 
   return new Promise((resolve, reject) => {
     upstreamRes.on('error', reject);
@@ -748,7 +854,11 @@ function pipeAndCollect(upstreamRes, clientRes, customNames, allowLifecycle) {
           clientRes.write(prefix + 'data: ' + dataLines.join('\n') + '\n\n');
           continue;
         }
+    if (Number.isInteger(obj.output_index)) obj.output_index += outputIndexOffset || 0;
+    if (Number.isInteger(obj.sequence_number)) obj.sequence_number += sequenceNumberOffset || 0;
     const t = obj.type || '';
+    if (Number.isInteger(obj.output_index)) maxOutputIndex = Math.max(maxOutputIndex, obj.output_index);
+    if (Number.isInteger(obj.sequence_number)) maxSequenceNumber = Math.max(maxSequenceNumber, obj.sequence_number);
 
     // Suppress duplicate lifecycle events after the first upstream turn.
         if (!allowLifecycle && (t === 'response.created' || t === 'response.in_progress' || t === 'response.queued')) {
@@ -802,7 +912,7 @@ function pipeAndCollect(upstreamRes, clientRes, customNames, allowLifecycle) {
       }
     });
    upstreamRes.on('end', () => {
-     resolve({ interceptedCalls, completedEvent });
+     resolve({ interceptedCalls, completedEvent, maxOutputIndex, maxSequenceNumber });
    });
   });
 }
@@ -848,7 +958,16 @@ async function runStreamingLoop(upstream, body, clientRes, info, options) {
       return;
     }
 
-    const result = await pipeAndCollect(upstreamRes, clientRes, customNames, loop === 0);
+    const result = await pipeAndCollect(
+      upstreamRes,
+      clientRes,
+      customNames,
+      loop === 0,
+      loop === 0 ? 0 : seq.index,
+      loop === 0 ? 0 : seq.num
+    );
+    seq.index = Math.max(seq.index, result.maxOutputIndex + 1);
+    seq.num = Math.max(seq.num, result.maxSequenceNumber + 1);
     const calls = result.interceptedCalls;
 
     if (calls.length === 0) {
@@ -871,15 +990,35 @@ async function runStreamingLoop(upstream, body, clientRes, info, options) {
        } catch (err) {
          outputStr = '[web_search error]\n' + err.message;
        }
+     } else if (call.name === imagine.GENERATE_IMAGE) {
+       // Emit an in-progress marker immediately so the app-server can fire
+       // the legacy ImageGenerationBegin event and the UI shows a placeholder.
+       // Yield to the event loop so the SSE frame reaches the client before
+       // the synchronous fulfillment runs and the completed marker follows.
+       const startedMarker = markers.makeImageGenerationStartedMarker(call);
+       const markerIndex = markers.emitOutputItemAdded(clientRes, startedMarker, seq);
+       await new Promise((resolve) => setTimeout(resolve, 0));
+       try {
+         const r = await imagine.fulfillGenerateImage(call, { host: UPSTREAM_HOST, port: UPSTREAM_PORT }, ROUTE_CFG, debugLog);
+         outputStr = r.output;
+       } catch (err) {
+         outputStr = '[generate_image error] ' + err.message;
+       }
+       const doneMarker = markers.makeImageGenerationMarker(call, outputStr);
+       markers.emitOutputItemDoneAt(clientRes, doneMarker, markerIndex, seq);
+       emittedItems.push(doneMarker);
+     } else if (call.name === imagine.PROXY_STATUS) {
+       const r = imagine.fulfillProxyStatus(call, ROUTE_CFG, debugLog);
+       outputStr = r.output;
      } else {
        // find_skill
        const r = skillFind.fulfillFindSkill(call, debugLog);
        outputStr = r.output;
      }
-    // web_search emits a UI marker; find_skill is fulfilled with no marker
-    // (the Codex app has no renderable chip for it -- see proxy_ui_markers.js).
+    // web_search -> web_search_call chip; generate_image -> image_generation_call chip;
+    // find_skill / ollama_proxy_status -> no chip (fulfilled silently).
     const marker = markers.makeMarker(call, outputStr);
-    if (marker) {
+    if (marker && call.name !== imagine.GENERATE_IMAGE) {
       markers.emitOutputItem(clientRes, marker, seq);
       emittedItems.push(marker);
     }
@@ -978,7 +1117,7 @@ const server = http.createServer((clientReq, clientRes) => {
         log('request body parse/translate failed: ' + e.message + ' (passing through)');
       }
     }
-    if (isResponses && body && webSearch.hasNativeWebSearchTool(body)) {
+    if (isResponses && body && (webSearch.hasNativeWebSearchTool(body) || imagine.hasProxyStatusTool(body) || (ROUTE_CFG.imagine_enabled && imagine.hasGenerateImageTool(body)) || (ROUTE_CFG.enable_find_skill && skillFind.hasFindSkillTool(body)))) {
       if (originalStream && ROUTE_CFG.stream_proxy_loop) {
         try {
           debugLog('streaming proxy loop enabled');
@@ -988,6 +1127,30 @@ const server = http.createServer((clientReq, clientRes) => {
           log('streaming proxy loop failed: ' + e.message + '; falling through to non-streaming loop');
           if (clientRes.headersSent) { clientRes.end(); return; }
           // else fall through to the non-streaming loop below
+        }
+      }
+      if (!webSearch.hasNativeWebSearchTool(body) && (imagine.hasProxyStatusTool(body) || (ROUTE_CFG.imagine_enabled && imagine.hasGenerateImageTool(body)))) {
+        try {
+          debugLog('imagine proxy loop enabled (generate_image + ollama_proxy_status)');
+          const result = await imagine.runGenerateImageLoop({ host: UPSTREAM_HOST, port: UPSTREAM_PORT }, body, ROUTE_CFG, { log: (...a) => debugLog(...a) });
+          const response = result.response;
+          translateFinalResponse(response, info);
+          if (originalStream) sendSseCompleted(clientRes, response);
+          else sendJsonResponse(clientRes, 200, response);
+          return;
+        } catch (e) {
+          log('imagine proxy loop failed: ' + e.message);
+          if (!clientRes.headersSent) {
+            sendJsonResponse(clientRes, 502, {
+              error: {
+                message: 'proxy imagine failed: ' + e.message,
+                type: 'proxy_imagine_error',
+              },
+            });
+          } else {
+            clientRes.end();
+          }
+          return;
         }
       }
       try {
@@ -1041,6 +1204,7 @@ const server = http.createServer((clientReq, clientRes) => {
         log('find_skill proxy loop failed; falling through to normal proxy flow');
       }
     }
+
     const upstreamHeaders = Object.assign({}, clientReq.headers);
     upstreamHeaders.host = UPSTREAM_HOST + ':' + UPSTREAM_PORT;
     upstreamHeaders['content-length'] = String(bodyBuf.length);
@@ -1092,6 +1256,20 @@ const server = http.createServer((clientReq, clientRes) => {
   clientReq.on('error', (e) => log('client error: ' + e.message));
 });
 
-server.listen(LISTEN_PORT, '127.0.0.1', () => {
-  log('listening on 127.0.0.1:' + LISTEN_PORT + ' -> ' + UPSTREAM_HOST + ':' + UPSTREAM_PORT);
-});
+function startServer() {
+  server.listen(LISTEN_PORT, '127.0.0.1', () => {
+    log('listening on 127.0.0.1:' + LISTEN_PORT + ' -> ' + UPSTREAM_HOST + ':' + UPSTREAM_PORT);
+  });
+  return server;
+}
+
+if (require.main === module || process.env.CODEX_OLLAMA_PROXY_AUTOSTART === '1') {
+  startServer();
+}
+
+module.exports = {
+  translateInputItem,
+  translateRequestBody,
+  startServer,
+  server,
+};

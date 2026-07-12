@@ -50,3 +50,44 @@ enable_find_skill = true
 # of the UI going silent ("feeling stuck"). Set to false to restore the old
 # collapse-to-final-response behavior. Env: PROXY_STREAM_LOOP=1 / =0.
 stream_proxy_loop = true
+
+# ── Image Generation (imagine.js) ───────────────────────────────────────────
+# When true, the proxy injects a synthetic `generate_image` function tool into
+# every /v1/responses request. The model can call generate_image{prompt,
+# inputImagePath, aspectRatio, quality} and the proxy fulfills it locally by
+# calling a cloud image generation API (Gemini or OpenAI). The generated image
+# is saved to a temp file and the path is returned to the model as tool output.
+# Works the same way as web_search and find_skill — no MCP server or separate
+# process needed. Set to false to disable image generation entirely.
+imagine_enabled = false
+
+# Which image generation backend to use:
+#   "gemini" — Google Gemini (Nano Banana 2 / Pro). Requires GEMINI_API_KEY.
+#   "openai"  — OpenAI GPT Image 2. Requires OPENAI_API_KEY.
+imagine_service = "gemini"
+
+# Default model for the selected backend. Must match the provider — do not mix
+# a Gemini model with imagine_service = "openai" or vice versa. If empty, the
+# provider's built-in default is used (quality-dependent for Gemini, gpt-image-2 for OpenAI).
+# Update together with imagine_service: --service and --model must always be set as a pair.
+imagine_model = ""
+
+# API key for the selected backend. If empty, falls back to the corresponding
+# environment variable (GEMINI_API_KEY or OPENAI_API_KEY).
+imagine_api_key = ""
+
+# Quality preset: "fast" (quick drafts), "balanced" (medium), "quality" (best).
+# Maps to backend-specific settings (Gemini model selection, OpenAI quality).
+imagine_quality = "fast"
+
+# When true, the proxy enhances the prompt before sending it to the image
+# backend by calling the Ollama text model with a Subject-Context-Style system
+# prompt. For image editing (inputImagePath provided), the enhancement includes
+# instructions to preserve the original image's characteristics. This adds one
+# extra round-trip to the Ollama model but produces richer, more detailed
+# prompts. Set to false to pass the raw prompt directly to the image backend.
+imagine_enhance = false
+
+# Default aspect ratio for generated images. The model can override this per
+# call via the aspectRatio parameter. Options: 1:1, 16:9, 9:16, 4:3, 3:4.
+imagine_aspect_ratio = "1:1"
