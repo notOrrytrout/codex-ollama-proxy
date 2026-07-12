@@ -1,5 +1,7 @@
 # codex-ollama-proxy
 
+[npm package](https://www.npmjs.com/package/codex-ollama-proxy)
+
 Unofficial experimental local compatibility proxy for testing Ollama-compatible Responses API shapes with local Codex config.
 
 It lets you use Ollama models with the Codex app while keeping Codex app plugins and tools available in the local app environment.
