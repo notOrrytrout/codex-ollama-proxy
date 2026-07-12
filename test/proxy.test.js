@@ -145,6 +145,22 @@ test('request translation converts native tool_search to callable function tool'
   assert.equal(body.tools.some((tool) => tool.type === 'tool_search'), false);
 });
 
+test('request translation injects tool_search when Codex omits it', () => {
+  const { translateRequestBody } = require('../src/proxy');
+  const body = {
+    model: 'test-model',
+    input: 'list available tools',
+    tools: [],
+  };
+
+  translateRequestBody(body);
+
+  assert.ok(
+    body.tools.some((tool) => tool.type === 'function' && tool.name === 'tool_search'),
+    'expected tool_search to be injected as a function tool'
+  );
+});
+
 test('proxy forwards responses requests to configured upstream URL with bearer auth', async () => {
   const received = [];
   const upstream = http.createServer((req, res) => {

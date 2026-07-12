@@ -122,7 +122,7 @@ codex-ollama-proxy restart
 
 ## Deferred MCP Tools
 
-The proxy supports Codex `tool_search` flows. When Codex exposes `tool_search` as a native managed tool, the proxy rewrites it into a normal model-callable function tool named `tool_search`, then maps the model's call back into Codex's native `tool_search_call` item.
+The proxy supports Codex `tool_search` flows. When Codex exposes `tool_search` as a native managed tool, the proxy rewrites it into a normal model-callable function tool named `tool_search`, then maps the model's call back into Codex's native `tool_search_call` item. If Codex omits native `tool_search` from a turn, the proxy injects the same function shim so deferred tool discovery remains available.
 
 When `tool_search` returns deferred MCP or plugin namespace tools, the proxy exposes those discovered tools as callable function tools on the follow-up model request, then maps the model's flattened tool call back into Codex's `namespace` and `name` fields.
 

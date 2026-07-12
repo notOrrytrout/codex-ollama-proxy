@@ -99,6 +99,8 @@ Recent Codex/Desktop builds can expose `tool_search` as a native managed tool:
 
 Many custom providers do not treat that native item as callable. The proxy rewrites it into a normal function tool named `tool_search` for the model, then maps the model's `function_call` back into Codex's native `tool_search_call`.
 
+If Codex omits the native `tool_search` item from a turn, the proxy still injects the same function shim so local/custom models can discover deferred tools consistently.
+
 When `tool_search` returns deferred MCP/plugin namespace tools, the proxy also exposes those discovered tools as top-level callable functions on the follow-up model request. For example, a Storefront Builder tool returned by search as `mcp__storefront_builder.list_storefront_build_sessions` is made callable to the model as `mcp__storefront_builder__list_storefront_build_sessions`, then translated back to Codex as:
 
 ```json

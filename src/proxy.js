@@ -520,6 +520,10 @@ function translateRequestBody(body) {
       mapped.push(skillFind.FIND_SKILL_FN);
       toolsChanged = true;
     }
+    if (!mapped.some((t) => t && ((t.type === 'function' && t.name === TOOL_SEARCH) || t.type === TOOL_SEARCH))) {
+      mapped.push(TOOL_SEARCH_FN);
+      toolsChanged = true;
+    }
     if (!mapped.some((t) => t && ((t.type === 'function' && t.name === WEB_SEARCH) || t.type === WEB_SEARCH))) {
       mapped.push(WEB_SEARCH_FN);
       toolsChanged = true;
