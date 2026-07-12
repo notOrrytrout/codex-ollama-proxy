@@ -242,7 +242,7 @@ function main() {
   const parsed = parseFlags(command === 'switch' ? tail : process.argv.slice(3));
   if (!command || command === '-h' || command === '--help') return usage();
   if (command === 'init') return init(parseFlags(process.argv.slice(3)).flags);
-  if (command === 'serve') return require('./proxy');
+  if (command === 'serve') return require('./proxy').startServer();
   if (command === 'status') return status();
   if (command === 'switch') return switchMode(subcommand, parsed.flags);
   if (command === 'route') return route(parseFlags(process.argv.slice(2)).flags);

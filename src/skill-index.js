@@ -353,6 +353,42 @@ function searchSkills(query, opts) {
   return scored.slice(0, limit);
 }
 
+function skillRoot(entry) {
+  const p = String(entry && entry.path || '');
+  if (p.includes('/.codex/skills/.system/')) return 'system';
+  if (p.includes('/.agents/skills/')) return 'agents';
+  if (p.includes('/.codex/skills/')) return 'user';
+  if (entry && entry.plugin_name) return 'plugin';
+  return 'other';
+}
+
+function normalizePluginFilter(plugin) {
+  const value = String(plugin || '').trim();
+  if (!value || value === '*') return null;
+  if (['none', 'builtin', 'built-in', 'local'].includes(value.toLowerCase())) return '';
+  return value;
+}
+
+function listSkills(opts) {
+  const entries = getEntries(opts && opts.force);
+  const pluginFilter = normalizePluginFilter(opts && opts.plugin);
+  const scopeFilter = String((opts && opts.scope) || '').trim();
+  const rootFilter = String((opts && opts.root) || '').trim();
+  const limitRaw = Number(opts && opts.limit);
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(500, Math.floor(limitRaw)) : 200;
+
+  return entries
+    .filter((entry) => pluginFilter == null || String(entry.plugin_name || '') === pluginFilter)
+    .filter((entry) => !scopeFilter || String(entry.scope || '') === scopeFilter)
+    .filter((entry) => !rootFilter || skillRoot(entry) === rootFilter)
+    .sort((a, b) => {
+      const pa = String(a.plugin_name || '');
+      const pb = String(b.plugin_name || '');
+      return pa.localeCompare(pb) || String(a.skill_name || '').localeCompare(String(b.skill_name || ''));
+    })
+    .slice(0, limit);
+}
+
 function formatSkillMatches(matches) {
   if (!matches || matches.length === 0) return '[find_skill] No matching skills found.';
   const lines = ['[find_skill] top ' + matches.length + ' skill match(es):'];
@@ -395,15 +431,34 @@ function formatSkillSummary(entries) {
   return JSON.stringify(summarizeSkills(entries), null, 2);
 }
 
+function formatSkillList(entries, filters) {
+  const skills = (entries || []).map((entry) => ({
+    skill_name: entry.skill_name,
+    plugin_name: entry.plugin_name || '',
+    scope: entry.scope || '',
+    root: skillRoot(entry),
+    path: entry.path,
+    description: entry.description || '',
+  }));
+  return JSON.stringify({
+    type: 'skills_list',
+    total_enabled_skills: skills.length,
+    filters: filters || {},
+    skills,
+  }, null, 2);
+}
+
 module.exports = {
   CODEX_DIR,
   AGENTS_SKILLS_DIR,
   getEntries,
   buildEntries,
   searchSkills,
+  listSkills,
   formatSkillMatches,
   summarizeSkills,
   formatSkillSummary,
+  formatSkillList,
   parseEnabledPlugins,
   parseDisabledSkillConfig,
   parseDisabledSkills,

@@ -309,6 +309,23 @@ function translateInputItem(item) {
         ...(item.id ? { id: item.id } : {}),
       };
     }
+    case 'image_generation_call': {
+      verboseToolLog('request input image_generation_call', item);
+      const bits = [];
+      const status = item.status ? String(item.status) : '';
+      if (status) bits.push('status=' + status);
+      if (item.revised_prompt) bits.push('prompt=' + String(item.revised_prompt));
+      if (item.saved_path) bits.push('saved_path=' + String(item.saved_path));
+      if (item.result && !item.saved_path) bits.push('result=' + String(item.result).slice(0, 200));
+      return {
+        type: 'message',
+        role: 'assistant',
+        content: [{
+          type: 'output_text',
+          text: '[image_generation_call] ' + (bits.length ? bits.join(' ') : 'completed'),
+        }],
+      };
+    }
     case 'custom_tool_call': {
       verboseToolLog('request input custom_tool_call', item);
       return {
@@ -1239,6 +1256,20 @@ const server = http.createServer((clientReq, clientRes) => {
   clientReq.on('error', (e) => log('client error: ' + e.message));
 });
 
-server.listen(LISTEN_PORT, '127.0.0.1', () => {
-  log('listening on 127.0.0.1:' + LISTEN_PORT + ' -> ' + UPSTREAM_HOST + ':' + UPSTREAM_PORT);
-});
+function startServer() {
+  server.listen(LISTEN_PORT, '127.0.0.1', () => {
+    log('listening on 127.0.0.1:' + LISTEN_PORT + ' -> ' + UPSTREAM_HOST + ':' + UPSTREAM_PORT);
+  });
+  return server;
+}
+
+if (require.main === module || process.env.CODEX_OLLAMA_PROXY_AUTOSTART === '1') {
+  startServer();
+}
+
+module.exports = {
+  translateInputItem,
+  translateRequestBody,
+  startServer,
+  server,
+};

@@ -130,6 +130,21 @@ test('skill index uses Codex app-server effective enabled skills when available'
     assert.equal(summary.total_enabled_skills, 2);
     assert.deepEqual(summary.by_plugin, { superpowers: 2 });
     assert.deepEqual(summary.by_scope, { user: 2 });
+
+    const listResult = skillFind.fulfillFindSkill({
+      call_id: 'call_list',
+      arguments: JSON.stringify({ action: 'list', plugin: 'superpowers', scope: 'user' }),
+    });
+    const list = JSON.parse(listResult.output);
+
+    assert.equal(list.type, 'skills_list');
+    assert.equal(list.total_enabled_skills, 2);
+    assert.deepEqual(list.filters, { plugin: 'superpowers', scope: 'user' });
+    assert.deepEqual(list.skills.map((entry) => entry.skill_name), [
+      'superpowers:brainstorming',
+      'superpowers:systematic-debugging',
+    ]);
+    assert.equal(list.skills[0].root, 'plugin');
   } finally {
     childProcess.spawnSync = originalSpawnSync;
     if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
