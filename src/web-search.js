@@ -164,6 +164,10 @@ function makeRateLimiter(requestsPerMinute) {
 }
 const ddgSearchLimiter = makeRateLimiter(30);
 const ddgFetchLimiter = makeRateLimiter(20);
+const searchBackends = {
+  requestJson,
+  duckDuckGoSearch,
+};
 
 function requestPostForm(url, formData, headers = {}) {
   return new Promise((resolve, reject) => {
@@ -300,7 +304,7 @@ async function searchWeb(args, log) {
   const directKey = process.env.OLLAMA_API_KEY;
   if (directKey) {
     try {
-      const data = await requestJson('https://ollama.com/api/web_search', {
+      const data = await searchBackends.requestJson('https://ollama.com/api/web_search', {
         query,
         max_results: maxResults,
       }, { authorization: `Bearer ${directKey}` });
@@ -311,7 +315,7 @@ async function searchWeb(args, log) {
   }
 
   try {
-    const data = await requestJson('http://127.0.0.1:11434/api/experimental/web_search', {
+    const data = await searchBackends.requestJson('http://127.0.0.1:11434/api/experimental/web_search', {
       query,
       max_results: maxResults,
     });
@@ -320,7 +324,7 @@ async function searchWeb(args, log) {
     log && log(`ollama local web_search failed: ${err.message}`);
   }
 
-  return duckDuckGoSearch(query, maxResults);
+  return searchBackends.duckDuckGoSearch(query, maxResults);
 }
 
 function formatSearchResult(search) {
@@ -405,4 +409,12 @@ module.exports = {
   findSearchCalls,
   searchWeb,
   formatSearchResult,
+  __setSearchBackendsForTest(overrides) {
+    if (overrides.requestJson) searchBackends.requestJson = overrides.requestJson;
+    if (overrides.duckDuckGoSearch) searchBackends.duckDuckGoSearch = overrides.duckDuckGoSearch;
+  },
+  __resetSearchBackendsForTest() {
+    searchBackends.requestJson = requestJson;
+    searchBackends.duckDuckGoSearch = duckDuckGoSearch;
+  },
 };
