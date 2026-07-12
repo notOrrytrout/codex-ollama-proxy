@@ -15,10 +15,19 @@ https://github.com/bharat2808/codex-ollama-proxy
 
 ## Minimal Install
 
-Prefer the GitHub release tarball:
+Install from npm:
 
 ```bash
-npm install -g https://github.com/bharat2808/codex-ollama-proxy/releases/download/v0.1.0/codex-ollama-proxy-0.1.0.tgz
+npm install -g codex-ollama-proxy
+codex-ollama-proxy init
+codex-ollama-proxy install
+codex-ollama-proxy status
+```
+
+To pin a specific release:
+
+```bash
+npm install -g https://registry.npmjs.org/codex-ollama-proxy/-/codex-ollama-proxy-0.3.2.tgz
 codex-ollama-proxy init
 codex-ollama-proxy install
 codex-ollama-proxy status
@@ -59,11 +68,10 @@ The proxy can inject a synthetic `generate_image` function tool that lets the mo
 
 ### Enable
 
-updated=/Users/home/.codex/ollama-shape-proxy/proxy-models.toml
-updated=/Users/home/.codex/ollama-shape-proxy/proxy-models.toml
-removed=/Users/home/Library/LaunchAgents/com.user.codex-ollama-shape-proxy.plist
-exists=/Users/home/.codex/ollama-shape-proxy/proxy-models.toml
-catalog_exists=/Users/home/.codex/ollama-launch-models-ollama-working.json
+```bash
+codex-ollama-proxy imagine --service gemini --model gemini-3-pro-image-preview --api-key "..."
+codex-ollama-proxy restart
+```
 
 ### Configuration
 
@@ -79,21 +87,11 @@ Common provider/model pairs:
 
 If `imagine_model` is empty, the provider's built-in default is used (quality-dependent for Gemini, `gpt-image-2` for OpenAI).
 
-updated=/Users/home/.codex/ollama-shape-proxy/proxy-models.toml
-updated=/Users/home/.codex/ollama-shape-proxy/proxy-models.toml
-updated=/Users/home/.codex/ollama-shape-proxy/proxy-models.toml
-updated=/Users/home/.codex/ollama-shape-proxy/proxy-models.toml
-updated=/Users/home/.codex/ollama-shape-proxy/proxy-models.toml
-updated=/Users/home/.codex/ollama-shape-proxy/proxy-models.toml
-updated=/Users/home/.codex/ollama-shape-proxy/proxy-models.toml
-updated=/Users/home/.codex/ollama-shape-proxy/proxy-models.toml
-Image generation configuration:
-  imagine_enabled = true
-  imagine_service = "openai"
-  imagine_api_key = (set)
-  imagine_quality = "quality"
-  imagine_enhance = false
-  imagine_aspect_ratio = "16:9"
+Inspect image generation settings:
+
+```bash
+codex-ollama-proxy imagine --status
+```
 
 ### Runtime Tools
 
@@ -106,14 +104,25 @@ The model can call `ollama_proxy_status` to check the configuration before gener
 
 ### Config Fields (proxy-models.toml)
 
-
+```toml
+imagine_enabled = true
+imagine_service = "gemini"
+imagine_model = "gemini-3-pro-image-preview"
+imagine_quality = "quality"
+imagine_aspect_ratio = "16:9"
+imagine_enhance = false
+```
 
 ### Disable
 
-updated=/Users/home/.codex/ollama-shape-proxy/proxy-models.toml
-removed=/Users/home/Library/LaunchAgents/com.user.codex-ollama-shape-proxy.plist
-exists=/Users/home/.codex/ollama-shape-proxy/proxy-models.toml
-catalog_exists=/Users/home/.codex/ollama-launch-models-ollama-working.json
+```bash
+codex-ollama-proxy imagine --disable
+codex-ollama-proxy restart
+```
+
+## Deferred MCP Tools
+
+The proxy supports Codex `tool_search` flows. When `tool_search` returns deferred MCP or plugin namespace tools, the proxy exposes those discovered tools as callable function tools on the follow-up model request, then maps the model's flattened tool call back into Codex's `namespace` and `name` fields.
 
 ## Uninstall
 
