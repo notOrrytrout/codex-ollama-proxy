@@ -135,6 +135,21 @@ const WEB_SEARCH_FN = {
   },
 };
 
+const TOOL_SEARCH_FN = {
+  type: 'function',
+  name: TOOL_SEARCH,
+  description: 'Search the available deferred Codex tools, plugin tools, MCP namespaces, and connectors by query. Use this when a needed tool is not already present in the current tool list. Returns matching tool definitions for a follow-up call.',
+  parameters: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: 'Search query describing the tool or capability needed.' },
+      limit: { type: 'number', description: 'Maximum number of matching tools to return. Defaults to 8.' },
+    },
+    required: ['query'],
+    additionalProperties: false,
+  },
+};
+
 // Persistent (process-wide) map of flat tool name -> {namespace, name}.
 // Populated from request tools (namespace entries) AND from tool_search_output
 // items in the conversation input, so deferred MCP tools (which never appear in
@@ -470,6 +485,12 @@ function translateRequestBody(body) {
         debugLog('native web_search tool shape: ' + JSON.stringify(summarizeToolShape(t)) + ' -> function tool');
         toolsChanged = true;
         mapped.push(WEB_SEARCH_FN);
+        continue;
+      }
+      if (t && t.type === TOOL_SEARCH) {
+        debugLog('native tool_search tool shape: ' + JSON.stringify(summarizeToolShape(t)) + ' -> function tool');
+        toolsChanged = true;
+        mapped.push(TOOL_SEARCH_FN);
         continue;
       }
       if (t && t.type === 'namespace' && t.name && Array.isArray(t.tools)) {

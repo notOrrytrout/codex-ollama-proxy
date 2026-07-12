@@ -109,6 +109,42 @@ test('request translation exposes deferred tool_search namespace tools as callab
   assert.match(body.input[0].output, /mcp__storefront_builder__list_storefront_build_sessions/);
 });
 
+test('request translation converts native tool_search to callable function tool', () => {
+  const { translateRequestBody } = require('../src/proxy');
+  const body = {
+    model: 'test-model',
+    input: 'find the storefront builder tools',
+    tools: [{
+      type: 'tool_search',
+      execution: 'client',
+      description: 'Search deferred tool metadata',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string' },
+          limit: { type: 'number' },
+        },
+        required: ['query'],
+        additionalProperties: false,
+      },
+    }],
+  };
+
+  translateRequestBody(body);
+
+  assert.ok(
+    body.tools.some((tool) =>
+      tool.type === 'function' &&
+      tool.name === 'tool_search' &&
+      tool.parameters &&
+      tool.parameters.properties &&
+      tool.parameters.properties.query
+    ),
+    'expected native tool_search to be exposed as a function tool'
+  );
+  assert.equal(body.tools.some((tool) => tool.type === 'tool_search'), false);
+});
+
 test('proxy forwards responses requests to configured upstream URL with bearer auth', async () => {
   const received = [];
   const upstream = http.createServer((req, res) => {

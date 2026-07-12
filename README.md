@@ -29,7 +29,7 @@ The proxy listens on `127.0.0.1:11436` and forwards to the configured upstream R
 To pin a specific release, install from the npm tarball:
 
 ```bash
-npm install -g https://registry.npmjs.org/codex-ollama-proxy/-/codex-ollama-proxy-0.3.2.tgz
+npm install -g https://registry.npmjs.org/codex-ollama-proxy/-/codex-ollama-proxy-0.3.3.tgz
 ```
 
 ## Use Codex Plugins With Ollama
@@ -90,6 +90,14 @@ Namespace tools are flattened into names that model providers can call. For exam
 ## Fix tool_search With Custom Providers
 
 The proxy keeps Codex `tool_search` flows usable by preserving deferred tool discovery and mapping returned tool calls back into Codex-compatible shapes.
+
+Recent Codex/Desktop builds can expose `tool_search` as a native managed tool:
+
+```json
+{ "type": "tool_search", "execution": "client" }
+```
+
+Many custom providers do not treat that native item as callable. The proxy rewrites it into a normal function tool named `tool_search` for the model, then maps the model's `function_call` back into Codex's native `tool_search_call`.
 
 When `tool_search` returns deferred MCP/plugin namespace tools, the proxy also exposes those discovered tools as top-level callable functions on the follow-up model request. For example, a Storefront Builder tool returned by search as `mcp__storefront_builder.list_storefront_build_sessions` is made callable to the model as `mcp__storefront_builder__list_storefront_build_sessions`, then translated back to Codex as:
 

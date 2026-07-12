@@ -27,7 +27,7 @@ codex-ollama-proxy status
 To pin a specific release:
 
 ```bash
-npm install -g https://registry.npmjs.org/codex-ollama-proxy/-/codex-ollama-proxy-0.3.2.tgz
+npm install -g https://registry.npmjs.org/codex-ollama-proxy/-/codex-ollama-proxy-0.3.3.tgz
 codex-ollama-proxy init
 codex-ollama-proxy install
 codex-ollama-proxy status
@@ -122,7 +122,9 @@ codex-ollama-proxy restart
 
 ## Deferred MCP Tools
 
-The proxy supports Codex `tool_search` flows. When `tool_search` returns deferred MCP or plugin namespace tools, the proxy exposes those discovered tools as callable function tools on the follow-up model request, then maps the model's flattened tool call back into Codex's `namespace` and `name` fields.
+The proxy supports Codex `tool_search` flows. When Codex exposes `tool_search` as a native managed tool, the proxy rewrites it into a normal model-callable function tool named `tool_search`, then maps the model's call back into Codex's native `tool_search_call` item.
+
+When `tool_search` returns deferred MCP or plugin namespace tools, the proxy exposes those discovered tools as callable function tools on the follow-up model request, then maps the model's flattened tool call back into Codex's `namespace` and `name` fields.
 
 ## Uninstall
 

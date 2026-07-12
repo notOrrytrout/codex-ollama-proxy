@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.3
+
+- Fixed newer Codex/Desktop `tool_search` exposure where the tool arrives as a native `type: "tool_search"` managed tool instead of a plain function definition.
+- The proxy now rewrites native `tool_search` into a model-callable `function` tool named `tool_search`, then maps the model call back into Codex's native `tool_search_call` response item.
+- Added regression coverage for native `tool_search` request translation.
+
 ## 0.3.2
 
 - Fixed deferred MCP/plugin tools discovered through `tool_search` so returned namespace tools are also exposed as callable top-level functions on the follow-up model request.
