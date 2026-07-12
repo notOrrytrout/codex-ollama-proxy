@@ -6,13 +6,21 @@ This will Let you use ollama model with the codex app and use the codex plugins 
 
 ## Install
 
+Install the latest release from npm:
+
 ```bash
-npm install -g https://github.com/bharat2808/codex-ollama-proxy/releases/download/v0.1.0/codex-ollama-proxy-0.1.0.tgz
+npm install -g codex-ollama-proxy
 codex-ollama-proxy init
 codex-ollama-proxy install
 ```
 
 The proxy listens on `127.0.0.1:11436` and forwards to Ollama on `127.0.0.1:11434`.
+
+To pin a specific release, install from the npm tarball:
+
+```bash
+npm install -g https://registry.npmjs.org/codex-ollama-proxy/-/codex-ollama-proxy-0.2.0.tgz
+```
 
 ## Configure
 
