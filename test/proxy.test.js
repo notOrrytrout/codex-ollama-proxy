@@ -68,6 +68,47 @@ test('request translation converts replayed image_generation_call items for Olla
   assert.doesNotMatch(JSON.stringify(body), /"image_generation_call"/);
 });
 
+test('request translation exposes deferred tool_search namespace tools as callable functions', () => {
+  const { translateRequestBody } = require('../src/proxy');
+  const body = {
+    model: 'test-model',
+    input: [{
+      type: 'tool_search_output',
+      call_id: 'call_search',
+      status: 'completed',
+      execution: 'client',
+      tools: [{
+        type: 'namespace',
+        name: 'mcp__storefront_builder',
+        description: 'Storefront Builder tools',
+        tools: [{
+          type: 'function',
+          name: 'list_storefront_build_sessions',
+          description: 'List sessions',
+          parameters: {
+            type: 'object',
+            properties: {},
+            additionalProperties: false,
+          },
+        }],
+      }],
+    }],
+    tools: [],
+  };
+
+  translateRequestBody(body);
+
+  assert.ok(
+    body.tools.some((tool) =>
+      tool.type === 'function' &&
+      tool.name === 'mcp__storefront_builder__list_storefront_build_sessions'
+    ),
+    'expected deferred namespace tool to be added to top-level tools'
+  );
+  assert.equal(body.input[0].type, 'function_call_output');
+  assert.match(body.input[0].output, /mcp__storefront_builder__list_storefront_build_sessions/);
+});
+
 test('proxy forwards responses requests to configured upstream URL with bearer auth', async () => {
   const received = [];
   const upstream = http.createServer((req, res) => {

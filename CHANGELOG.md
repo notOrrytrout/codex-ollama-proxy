@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.2
+
+- Fixed deferred MCP/plugin tools discovered through `tool_search` so returned namespace tools are also exposed as callable top-level functions on the follow-up model request.
+- Added regression coverage for Storefront Builder-style deferred namespace tools, preventing models from seeing a tool in `tool_search_output` but being unable to invoke it.
+
 ## 0.3.1
 
 - Improved npm discoverability with a benefit-focused package description and search keywords.

@@ -169,6 +169,23 @@ function flattenNamespaceTool(namespace, tool) {
   };
 }
 
+function flattenDiscoveredTools(tools) {
+  const out = [];
+  if (!Array.isArray(tools)) return out;
+  for (const t of tools) {
+    if (!t || typeof t !== 'object') continue;
+    if (t.type === 'namespace' && t.name && Array.isArray(t.tools)) {
+      for (const sub of t.tools) {
+        const flat = flattenNamespaceTool(t.name, sub);
+        if (flat) out.push(flat);
+      }
+    } else if (t.type === 'function' && t.name) {
+      out.push(t);
+    }
+  }
+  return out;
+}
+
 function log(...args) {
   process.stderr.write('[shape-proxy] ' + args.join(' ') + '\n');
 }
@@ -430,9 +447,13 @@ function translateRequestBody(body) {
   if (Array.isArray(body.tools)) ingestNamespaces(body.tools);
   applyModelRouting(body);
   let inputChanged = false;
+  const deferredTools = [];
   if (Array.isArray(body.input)) {
     const newInput = body.input.map((it) => {
-      if (it && it.type === 'tool_search_output' && Array.isArray(it.tools)) ingestNamespaces(it.tools);
+      if (it && it.type === 'tool_search_output' && Array.isArray(it.tools)) {
+        ingestNamespaces(it.tools);
+        deferredTools.push(...flattenDiscoveredTools(it.tools));
+      }
       const t = translateInputItem(it);
       if (t !== it) inputChanged = true;
       return t;
@@ -467,6 +488,12 @@ function translateRequestBody(body) {
         }
       }
       mapped.push(t);
+    }
+    for (const t of deferredTools) {
+      if (!mapped.some((existing) => existing && existing.type === 'function' && existing.name === t.name)) {
+        mapped.push(t);
+        toolsChanged = true;
+      }
     }
     if (ROUTE_CFG.enable_find_skill && !mapped.some((t) => t && t.type === 'function' && t.name === skillFind.FIND_SKILL)) {
       mapped.push(skillFind.FIND_SKILL_FN);
