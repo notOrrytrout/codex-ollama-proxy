@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1
+
+- Improved npm discoverability with a benefit-focused package description and search keywords.
+- Reworked the README introduction around Codex plugin, MCP, `tool_search`, namespace tool, OpenRouter, and `apply_patch` compatibility use cases.
+- Added provider, limitations, and troubleshooting-oriented README sections for search visibility.
+
 ## 0.3.0
 
 - Added configurable upstream Responses API support via `upstream_url` and optional `upstream_api_key`.

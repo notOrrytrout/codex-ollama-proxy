@@ -1,14 +1,22 @@
-# codex-ollama-proxy
+# Codex Ollama Proxy
 
 [npm package](https://www.npmjs.com/package/codex-ollama-proxy)
 
-Unofficial experimental local compatibility proxy for testing Ollama-compatible Responses API shapes with local Codex config.
+Use Ollama, OpenRouter, and other Responses API providers with Codex while preserving Codex plugins, MCP tools, `tool_search`, and `apply_patch`.
 
-It lets you use Ollama models with the Codex app while keeping Codex app plugins and tools available in the local app environment.
+Codex normally sends plugins and MCP tools using OpenAI-specific namespace and dynamic-tool formats. Many custom providers reject or cannot interpret these formats, producing errors such as:
 
-## Install
+- `unsupported call`
+- MCP tools are visible but never invoked
+- `tool_search` aborts
+- namespace tools are rejected
+- `apply_patch` is returned in the wrong format
 
-Install the latest release from npm:
+`codex-ollama-proxy` runs locally and translates these request and response shapes between Codex and the configured model provider.
+
+This is unofficial and experimental. Codex internal tool formats can change, so the proxy may need updates as Codex changes.
+
+## Quick Start
 
 ```bash
 npm install -g codex-ollama-proxy
@@ -21,26 +29,39 @@ The proxy listens on `127.0.0.1:11436` and forwards to the configured upstream R
 To pin a specific release, install from the npm tarball:
 
 ```bash
-npm install -g https://registry.npmjs.org/codex-ollama-proxy/-/codex-ollama-proxy-0.3.0.tgz
+npm install -g https://registry.npmjs.org/codex-ollama-proxy/-/codex-ollama-proxy-0.3.1.tgz
 ```
 
-## Configure
+## Use Codex Plugins With Ollama
 
-Set the upstream Responses API server:
+The default upstream is Ollama's local OpenAI-compatible Responses API:
 
 ```bash
 codex-ollama-proxy upstream --url "http://127.0.0.1:11434/v1"
-codex-ollama-proxy upstream --status
+codex-ollama-proxy restart
 ```
 
-For an upstream that requires bearer auth:
+The proxy flattens Codex namespace/plugin tools into model-callable functions, then maps the resulting calls back to the format Codex expects.
+
+## Use Codex Plugins With OpenRouter
+
+Point the upstream at a Responses-compatible OpenRouter endpoint and provide a bearer token:
 
 ```bash
-codex-ollama-proxy upstream --url "https://example.com/v1" --api-key "KEY"
+codex-ollama-proxy upstream --url "https://openrouter.ai/api/v1" --api-key "KEY"
 codex-ollama-proxy restart
 ```
 
 The upstream must expose a compatible Responses API. Chat Completions-only APIs (`/v1/chat/completions`) need a separate adapter and are not supported by this setting alone.
+
+## Configure Upstream Responses API
+
+Set or inspect the upstream Responses API server:
+
+```bash
+codex-ollama-proxy upstream --url "https://example.com/v1" --api-key "KEY"
+codex-ollama-proxy upstream --status
+```
 
 Separate text and image models:
 
@@ -57,6 +78,37 @@ codex-ollama-proxy switch ollama --model "MODEL"
 ```
 
 After switching, restart Codex or open a fresh thread.
+
+## Fix MCP Unsupported Call Errors In Codex
+
+Codex app plugins and MCP tools can arrive as namespace tools or dynamically loaded tools. Local/custom providers often cannot invoke those shapes directly. The proxy rewrites those tools into ordinary function tools for the model, then restores the calls for Codex.
+
+## Fix Codex Namespace Tool Compatibility
+
+Namespace tools are flattened into names that model providers can call. For example, a namespace tool can be exposed as a function-like tool and then split back into the namespace/name pair expected by Codex.
+
+## Fix tool_search With Custom Providers
+
+The proxy keeps Codex `tool_search` flows usable by preserving deferred tool discovery and mapping returned tool calls back into Codex-compatible shapes.
+
+## How apply_patch Translation Works
+
+Codex may expose `apply_patch` as a custom/freeform tool. The proxy preserves the freeform custom tool behavior for Codex while making the surrounding tool list easier for local or custom Responses API providers to handle.
+
+## Supported Providers
+
+- Ollama-compatible Responses API servers
+- OpenRouter or other custom providers that expose a compatible Responses API
+- Local shims that accept `POST /v1/responses`
+
+Chat Completions-only providers are not supported by upstream URL configuration alone.
+
+## Known Limitations
+
+- This package is not affiliated with OpenAI.
+- Codex internal tool schemas can change.
+- Provider support depends on how closely the upstream matches the Responses API.
+- Web search falls back from Ollama cloud search, to local Ollama search, to DuckDuckGo HTML search.
 
 ## Codex Skill
 
