@@ -1,6 +1,6 @@
 {
   "name": "codex-ollama-proxy",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Unofficial local compatibility proxy for testing Ollama-compatible Responses API shapes with Codex config.",
   "author": "bharat2808",
   "license": "MIT",
