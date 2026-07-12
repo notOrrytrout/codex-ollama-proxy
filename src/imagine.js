@@ -257,11 +257,24 @@ async function enhancePrompt(upstream, userPrompt, config, systemPrompt, inputIm
 
 // ── Image backends ──────────────────────────────────────────────────────────
 
+function buildGeminiGenerationConfig(options) {
+  const generationConfig = {
+    responseModalities: ['IMAGE'],
+  };
+  const imageConfig = {};
+  if (options && options.aspectRatio) imageConfig.aspectRatio = options.aspectRatio;
+  if (options && options.imageSize) imageConfig.imageSize = options.imageSize;
+  if (Object.keys(imageConfig).length > 0) {
+    generationConfig.imageConfig = imageConfig;
+  }
+  return generationConfig;
+}
+
 // Gemini image generation (text-to-image and image-to-image)
 async function generateGeminiImage(prompt, options, log) {
   const model = options.model || (options.quality === 'quality'
-    ? 'gemini-3-pro-image-preview'
-    : 'gemini-3.1-flash-image-preview');
+    ? 'gemini-3-pro-image'
+    : 'gemini-3.1-flash-image');
   const apiKey = options.apiKey || process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY is not set (configure imagine_api_key or set GEMINI_API_KEY env)');
 
@@ -282,11 +295,7 @@ async function generateGeminiImage(prompt, options, log) {
     contents = [{ parts: [{ text: prompt }] }];
   }
 
-  const generationConfig = {
-    responseModalities: ['IMAGE'],
-  };
-  if (options.aspectRatio) generationConfig.aspectRatio = options.aspectRatio;
-  if (options.imageSize) generationConfig.imageSize = options.imageSize;
+  const generationConfig = buildGeminiGenerationConfig(options);
 
   const body = JSON.stringify({ contents, generationConfig });
   const res = await httpsRequest(url, {
@@ -745,6 +754,7 @@ module.exports = {
   runGenerateImageLoop,
   checkHealth,
   validateInputImagePath,
+  buildGeminiGenerationConfig,
   PROXY_STATUS,
   PROXY_STATUS_FN,
   hasProxyStatusTool,

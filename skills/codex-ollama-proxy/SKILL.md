@@ -75,7 +75,7 @@ Common provider/model pairs:
 |----------|-------|---------|
 | `openai` | `gpt-image-2` | `codex-ollama-proxy imagine --service openai --model gpt-image-2 --api-key "sk-..."` |
 | `gemini` | `gemini-3-pro-image-preview` | `codex-ollama-proxy imagine --service gemini --model gemini-3-pro-image-preview --api-key "..."` |
-| `gemini` | `gemini-3.1-flash-image-preview` | `codex-ollama-proxy imagine --service gemini --model gemini-3.1-flash-image-preview --api-key "..."` |
+| `gemini` | `gemini-3.1-flash-image` | `codex-ollama-proxy imagine --service gemini --model gemini-3.1-flash-image --api-key "..."` |
 
 If `imagine_model` is empty, the provider's built-in default is used (quality-dependent for Gemini, `gpt-image-2` for OpenAI).
 
