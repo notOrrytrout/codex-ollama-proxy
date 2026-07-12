@@ -2,7 +2,7 @@
 
 Unofficial experimental local compatibility proxy for testing Ollama-compatible Responses API shapes with local Codex config.
 
-This will Let you use ollama model with the codex app and use the codex plugins in codex app environment.
+It lets you use Ollama models with the Codex app while keeping Codex app plugins and tools available in the local app environment.
 
 ## Install
 
@@ -19,7 +19,7 @@ The proxy listens on `127.0.0.1:11436` and forwards to Ollama on `127.0.0.1:1143
 To pin a specific release, install from the npm tarball:
 
 ```bash
-npm install -g https://registry.npmjs.org/codex-ollama-proxy/-/codex-ollama-proxy-0.2.0.tgz
+npm install -g https://registry.npmjs.org/codex-ollama-proxy/-/codex-ollama-proxy-0.2.1.tgz
 ```
 
 ## Configure
