@@ -12,11 +12,11 @@
 // system prompt. Reference images (image-to-image editing) are supported via
 // the inputImagePath parameter.
 
-const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const upstreamLib = require('./upstream');
 
 const GENERATE_IMAGE = 'generate_image';
 const MAX_LOOPS = 4;
@@ -151,34 +151,7 @@ function parseArgs(v) {
 }
 
 function postResponses(upstream, body) {
-  return new Promise((resolve, reject) => {
-    const payload = JSON.stringify(body);
-    const req = http.request({
-      hostname: upstream.host,
-      port: upstream.port,
-      path: '/v1/responses',
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'content-length': Buffer.byteLength(payload),
-      },
-    }, (res) => {
-      let data = '';
-      res.setEncoding('utf8');
-      res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => {
-        let parsed = null;
-        try { parsed = JSON.parse(data); } catch {}
-        if (res.statusCode >= 200 && res.statusCode < 300) {
-          resolve(parsed == null ? data : parsed);
-          return;
-        }
-        reject(new Error('HTTP ' + res.statusCode + ': ' + (data || res.statusMessage).slice(0, 500)));
-      });
-    });
-    req.on('error', reject);
-    req.end(payload);
-  });
+  return upstreamLib.requestJson(upstream, body);
 }
 
 function httpsRequest(url, options, bodyBuf) {

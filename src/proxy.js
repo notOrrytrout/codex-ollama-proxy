@@ -7,6 +7,7 @@ const webSearch = require('./web-search');
 const skillFind = require('./skill-find');
 const imagine = require('./imagine');
 const markers = require('./ui-markers');
+const upstreamLib = require('./upstream');
 
 // proxy-models.toml drives per-request model auto-routing.
 // Loaded once at startup; editable without restart by re-running apply script.
@@ -14,7 +15,7 @@ const CODEX_DIR = process.env.CODEX_HOME || path.join(process.env.HOME, '.codex'
 const RUNTIME_DIR = path.join(CODEX_DIR, 'ollama-shape-proxy');
 const PROXY_MODELS_PATH = path.join(RUNTIME_DIR, 'proxy-models.toml');
 const UPSTREAM_BODY_LOG = path.join(RUNTIME_DIR, 'upstream-bodies.jsonl');
-const ROUTE_CFG = { text_model: null, image_model: null, auto_route_image: false, verbose_tools: false, log_upstream_body: false, enable_find_skill: false, stream_proxy_loop: true, imagine_enabled: false, imagine_service: "gemini", imagine_model: "", imagine_api_key: "", imagine_quality: "fast", imagine_enhance: false, imagine_aspect_ratio: "1:1" };
+const ROUTE_CFG = { text_model: null, image_model: null, auto_route_image: false, verbose_tools: false, log_upstream_body: false, enable_find_skill: false, stream_proxy_loop: true, upstream_url: upstreamLib.DEFAULT_UPSTREAM_URL, upstream_api_key: "", imagine_enabled: false, imagine_service: "gemini", imagine_model: "", imagine_api_key: "", imagine_quality: "fast", imagine_enhance: false, imagine_aspect_ratio: "1:1" };
 function loadRouteConfig() {
   try {
     const raw = fs.readFileSync(PROXY_MODELS_PATH, 'utf8');
@@ -31,7 +32,11 @@ function loadRouteConfig() {
   if (process.env.PROXY_FIND_SKILL === '0') ROUTE_CFG.enable_find_skill = false;
   if (process.env.PROXY_STREAM_LOOP === '1') ROUTE_CFG.stream_proxy_loop = true;
   if (process.env.PROXY_STREAM_LOOP === '0') ROUTE_CFG.stream_proxy_loop = false;
-  log('route config: text=' + ROUTE_CFG.text_model + ' image=' + ROUTE_CFG.image_model + ' auto_route_image=' + ROUTE_CFG.auto_route_image + ' verbose_tools=' + ROUTE_CFG.verbose_tools + ' log_upstream_body=' + ROUTE_CFG.log_upstream_body + ' find_skill=' + ROUTE_CFG.enable_find_skill + ' stream_loop=' + ROUTE_CFG.stream_proxy_loop + ' imagine=' + ROUTE_CFG.imagine_enabled + ' imagine_service=' + ROUTE_CFG.imagine_service);
+  log('route config: text=' + ROUTE_CFG.text_model + ' image=' + ROUTE_CFG.image_model + ' auto_route_image=' + ROUTE_CFG.auto_route_image + ' verbose_tools=' + ROUTE_CFG.verbose_tools + ' log_upstream_body=' + ROUTE_CFG.log_upstream_body + ' find_skill=' + ROUTE_CFG.enable_find_skill + ' stream_loop=' + ROUTE_CFG.stream_proxy_loop + ' upstream=' + upstreamLib.displayUrl(getUpstream()) + ' imagine=' + ROUTE_CFG.imagine_enabled + ' imagine_service=' + ROUTE_CFG.imagine_service);
+}
+
+function getUpstream() {
+  return upstreamLib.createUpstream(process.env.PROXY_UPSTREAM_URL || ROUTE_CFG.upstream_url, process.env.PROXY_UPSTREAM_API_KEY || ROUTE_CFG.upstream_api_key);
 }
 loadRouteConfig();
 
@@ -94,8 +99,6 @@ function forceImageCapabilityForTextModel() {
 }
 forceImageCapabilityForTextModel();
 
-const UPSTREAM_HOST = '127.0.0.1';
-const UPSTREAM_PORT = 11434;
 const LISTEN_PORT = parseInt(process.env.PROXY_PORT || '11435', 10);
 
 const TOOL_SEARCH = 'tool_search';
@@ -787,17 +790,19 @@ function processSseChunk(chunkBuf, clientRes, state) {
 
 function postUpstreamStream(upstream, body) {
   return new Promise((resolve, reject) => {
+    const url = upstreamLib.responsesUrl(upstream);
     const payload = JSON.stringify(body);
-    const req = http.request({
-      host: upstream.host,
-      port: upstream.port,
+    const req = upstreamLib.transport(url).request({
+      protocol: url.protocol,
+      hostname: url.hostname,
+      port: url.port || undefined,
       method: 'POST',
-      path: '/v1/responses',
-      headers: {
+      path: url.pathname + url.search,
+      headers: Object.assign({
         'content-type': 'application/json',
         'content-length': Buffer.byteLength(payload),
         accept: 'text/event-stream',
-      },
+      }, upstreamLib.authHeaders(upstream)),
     }, (res) => {
       if (res.statusCode && res.statusCode >= 400) {
         let buf = '';
@@ -999,7 +1004,7 @@ async function runStreamingLoop(upstream, body, clientRes, info, options) {
        const markerIndex = markers.emitOutputItemAdded(clientRes, startedMarker, seq);
        await new Promise((resolve) => setTimeout(resolve, 0));
        try {
-         const r = await imagine.fulfillGenerateImage(call, { host: UPSTREAM_HOST, port: UPSTREAM_PORT }, ROUTE_CFG, debugLog);
+         const r = await imagine.fulfillGenerateImage(call, upstream, ROUTE_CFG, debugLog);
          outputStr = r.output;
        } catch (err) {
          outputStr = '[generate_image error] ' + err.message;
@@ -1117,11 +1122,12 @@ const server = http.createServer((clientReq, clientRes) => {
         log('request body parse/translate failed: ' + e.message + ' (passing through)');
       }
     }
+    const upstream = getUpstream();
     if (isResponses && body && (webSearch.hasNativeWebSearchTool(body) || imagine.hasProxyStatusTool(body) || (ROUTE_CFG.imagine_enabled && imagine.hasGenerateImageTool(body)) || (ROUTE_CFG.enable_find_skill && skillFind.hasFindSkillTool(body)))) {
       if (originalStream && ROUTE_CFG.stream_proxy_loop) {
         try {
           debugLog('streaming proxy loop enabled');
-          await runStreamingLoop({ host: UPSTREAM_HOST, port: UPSTREAM_PORT }, body, clientRes, info, { log: (...a) => log(...a) });
+          await runStreamingLoop(upstream, body, clientRes, info, { log: (...a) => log(...a) });
           return;
         } catch (e) {
           log('streaming proxy loop failed: ' + e.message + '; falling through to non-streaming loop');
@@ -1132,7 +1138,7 @@ const server = http.createServer((clientReq, clientRes) => {
       if (!webSearch.hasNativeWebSearchTool(body) && (imagine.hasProxyStatusTool(body) || (ROUTE_CFG.imagine_enabled && imagine.hasGenerateImageTool(body)))) {
         try {
           debugLog('imagine proxy loop enabled (generate_image + ollama_proxy_status)');
-          const result = await imagine.runGenerateImageLoop({ host: UPSTREAM_HOST, port: UPSTREAM_PORT }, body, ROUTE_CFG, { log: (...a) => debugLog(...a) });
+          const result = await imagine.runGenerateImageLoop(upstream, body, ROUTE_CFG, { log: (...a) => debugLog(...a) });
           const response = result.response;
           translateFinalResponse(response, info);
           if (originalStream) sendSseCompleted(clientRes, response);
@@ -1156,8 +1162,8 @@ const server = http.createServer((clientReq, clientRes) => {
       try {
         debugLog('native web_search proxy loop enabled');
         const result = await webSearch.runResponsesLoop({
-          host: UPSTREAM_HOST,
-          port: UPSTREAM_PORT,
+          baseUrl: upstream.baseUrl,
+          apiKey: upstream.apiKey,
         }, body, { log: (...args) => debugLog(...args), verboseTools: ROUTE_CFG.verbose_tools });
         const response = result.response;
         translateFinalResponse(response, info);
@@ -1193,7 +1199,7 @@ const server = http.createServer((clientReq, clientRes) => {
     if (isResponses && body && ROUTE_CFG.enable_find_skill && skillFind.hasFindSkillTool(body)) {
       try {
         debugLog('find_skill proxy loop enabled');
-        const result = await skillFind.runFindSkillLoop({ host: UPSTREAM_HOST, port: UPSTREAM_PORT }, body, { log: (...a) => debugLog(...a) });
+        const result = await skillFind.runFindSkillLoop(upstream, body, { log: (...a) => debugLog(...a) });
         const response = result.response;
         translateFinalResponse(response, info);
         if (originalStream) sendSseCompleted(clientRes, response);
@@ -1205,14 +1211,16 @@ const server = http.createServer((clientReq, clientRes) => {
       }
     }
 
-    const upstreamHeaders = Object.assign({}, clientReq.headers);
-    upstreamHeaders.host = UPSTREAM_HOST + ':' + UPSTREAM_PORT;
+    const targetUrl = upstreamLib.urlForClientPath(upstream, clientReq.url);
+    const upstreamHeaders = Object.assign({}, clientReq.headers, upstreamLib.authHeaders(upstream));
+    upstreamHeaders.host = targetUrl.host;
     upstreamHeaders['content-length'] = String(bodyBuf.length);
-    const upstreamReq = http.request({
-      host: UPSTREAM_HOST,
-      port: UPSTREAM_PORT,
+    const upstreamReq = upstreamLib.transport(targetUrl).request({
+      protocol: targetUrl.protocol,
+      hostname: targetUrl.hostname,
+      port: targetUrl.port || undefined,
       method: clientReq.method,
-      path: clientReq.url,
+      path: targetUrl.pathname + targetUrl.search,
       headers: upstreamHeaders,
     }, (upstreamRes) => {
       if (isResponses && originalStream) {
@@ -1256,9 +1264,9 @@ const server = http.createServer((clientReq, clientRes) => {
   clientReq.on('error', (e) => log('client error: ' + e.message));
 });
 
-function startServer() {
-  server.listen(LISTEN_PORT, '127.0.0.1', () => {
-    log('listening on 127.0.0.1:' + LISTEN_PORT + ' -> ' + UPSTREAM_HOST + ':' + UPSTREAM_PORT);
+function startServer(port = LISTEN_PORT) {
+  server.listen(port, '127.0.0.1', () => {
+    log('listening on 127.0.0.1:' + port + ' -> ' + upstreamLib.displayUrl(getUpstream()));
   });
   return server;
 }
@@ -1270,6 +1278,7 @@ if (require.main === module || process.env.CODEX_OLLAMA_PROXY_AUTOSTART === '1')
 module.exports = {
   translateInputItem,
   translateRequestBody,
+  getUpstream,
   startServer,
   server,
 };

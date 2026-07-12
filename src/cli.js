@@ -26,6 +26,7 @@ function usage() {
   codex-ollama-proxy switch openai
   codex-ollama-proxy switch ollama [--model MODEL]
   codex-ollama-proxy route --text-model MODEL --image-model MODEL [--auto-image|--no-auto-image]
+  codex-ollama-proxy upstream [--url URL] [--api-key KEY] [--status]
   codex-ollama-proxy logs [--tail N]
   codex-ollama-proxy install
   codex-ollama-proxy uninstall
@@ -102,9 +103,11 @@ function init(options = {}) {
   }
 }
 
-// Redact imagine_api_key value in a TOML string so status() never leaks the key.
-function redactApiKey(text) {
-  return text.replace(/^(\s*imagine_api_key\s*=\s*").*(".*)$/m, '$1***$2');
+// Redact secret values in a TOML string so status() never leaks API keys.
+function redactSecrets(text) {
+  return text
+    .replace(/^(\s*imagine_api_key\s*=\s*").*(".*)$/m, '$1***$2')
+    .replace(/^(\s*upstream_api_key\s*=\s*").*(".*)$/m, '$1***$2');
 }
 
 function readRouteConfig() {
@@ -129,6 +132,35 @@ function route(flags) {
   console.log(`updated=${ROUTE_CONFIG}`);
 }
 
+function upstreamCmd(flags) {
+  if (flags.status) {
+    const text = readRouteConfig();
+    for (const field of ['upstream_url', 'upstream_api_key']) {
+      const m = text.match(new RegExp('^\\s*' + field + '\\s*=\\s*(.*)$', 'm'));
+      const val = m ? m[1] : '(not set)';
+      const display = field === 'upstream_api_key' && val !== '""' && val !== '(not set)' ? '(set)' : val;
+      console.log(field + ' = ' + display);
+    }
+    return;
+  }
+  let text = readRouteConfig();
+  if (flags.url) {
+    try {
+      const url = new URL(flags.url);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('must use http or https');
+    } catch (err) {
+      die('Error: --url must be an absolute http(s) URL. ' + err.message);
+    }
+    text = writeRouteValue(text, 'upstream_url', flags.url);
+  }
+  if (flags.apiKey) text = writeRouteValue(text, 'upstream_api_key', flags.apiKey);
+  if (!flags.url && !flags.apiKey) {
+    die('Error: upstream requires --url, --api-key, or --status.');
+  }
+  fs.writeFileSync(ROUTE_CONFIG, text, 'utf8');
+  console.log(`updated=${ROUTE_CONFIG}`);
+}
+
 function codexConfig(args) {
   run(process.execPath, [path.join(PACKAGE_DIR, 'model_config.js'), ...args]);
 }
@@ -149,7 +181,7 @@ function switchMode(mode, flags) {
 function status() {
   codexConfig(['status']);
   console.log('');
-  console.log(redactApiKey(readRouteConfig()).trim());
+  console.log(redactSecrets(readRouteConfig()).trim());
   const req = http.get(`http://127.0.0.1:${PROXY_PORT}/v1/models`, { timeout: 2000 }, (res) => {
     res.resume();
     console.log(`\nproxy=http://127.0.0.1:${PROXY_PORT} status=${res.statusCode}`);
@@ -263,6 +295,7 @@ function main() {
   if (command === 'status') return status();
   if (command === 'switch') return switchMode(subcommand, parsed.flags);
   if (command === 'route') return route(parseFlags(process.argv.slice(2)).flags);
+  if (command === 'upstream') return upstreamCmd(parseFlags(process.argv.slice(2)).flags);
   if (command === 'logs') return logs(parsed.flags);
   if (command === 'install') return install();
   if (command === 'uninstall') return uninstall();

@@ -16,15 +16,31 @@ codex-ollama-proxy init
 codex-ollama-proxy install
 ```
 
-The proxy listens on `127.0.0.1:11436` and forwards to Ollama on `127.0.0.1:11434`.
+The proxy listens on `127.0.0.1:11436` and forwards to the configured upstream Responses API server. By default, the upstream is local Ollama at `http://127.0.0.1:11434/v1`.
 
 To pin a specific release, install from the npm tarball:
 
 ```bash
-npm install -g https://registry.npmjs.org/codex-ollama-proxy/-/codex-ollama-proxy-0.2.1.tgz
+npm install -g https://registry.npmjs.org/codex-ollama-proxy/-/codex-ollama-proxy-0.3.0.tgz
 ```
 
 ## Configure
+
+Set the upstream Responses API server:
+
+```bash
+codex-ollama-proxy upstream --url "http://127.0.0.1:11434/v1"
+codex-ollama-proxy upstream --status
+```
+
+For an upstream that requires bearer auth:
+
+```bash
+codex-ollama-proxy upstream --url "https://example.com/v1" --api-key "KEY"
+codex-ollama-proxy restart
+```
+
+The upstream must expose a compatible Responses API. Chat Completions-only APIs (`/v1/chat/completions`) need a separate adapter and are not supported by this setting alone.
 
 Separate text and image models:
 
@@ -60,6 +76,7 @@ Install this skill and use it to set up codex-ollama-proxy.
 
 ```bash
 codex-ollama-proxy status
+codex-ollama-proxy upstream --status
 codex-ollama-proxy logs --tail 100
 codex-ollama-proxy restart
 codex-ollama-proxy switch openai

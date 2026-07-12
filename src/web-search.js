@@ -3,6 +3,7 @@
 const http = require('http');
 const https = require('https');
 const skillFind = require('./skill-find');
+const upstreamLib = require('./upstream');
 
 const SEARCH_TOOL_NAMES = new Set(['web_search']);
 const DEFAULT_MAX_RESULTS = 5;
@@ -337,7 +338,7 @@ function formatSearchResult(search) {
 }
 
 async function postResponses(upstream, body) {
-  return requestJson(`http://${upstream.host}:${upstream.port}/v1/responses`, body);
+  return upstreamLib.requestJson(upstream, body);
 }
 
 async function runResponsesLoop(upstream, originalBody, options = {}) {

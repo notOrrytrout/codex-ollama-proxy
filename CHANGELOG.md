@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0
+
+- Added configurable upstream Responses API support via `upstream_url` and optional `upstream_api_key`.
+- Added `codex-ollama-proxy upstream --url ...`, `--api-key ...`, and `--status` CLI commands.
+- Updated proxy forwarding, streaming continuation loops, `find_skill`, `web_search`, and image-generation prompt enhancement to use the configured upstream.
+- Documented the difference between Responses-compatible upstreams and Chat Completions-only APIs.
+
 ## 0.2.1
 
 - Fixed `codex-ollama-proxy install` on macOS by retrying `launchctl bootstrap` briefly after `bootout`, avoiding transient `Bootstrap failed: 5: Input/output error` failures while launchd releases the previous job.

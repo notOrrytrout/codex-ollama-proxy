@@ -9,8 +9,8 @@
 // function_call_output, then re-runs the model so it can act on the matched
 // SKILL.md paths. web_search is intentionally NOT touched here.
 
-const http = require('http');
 const skillIndex = require('./skill-index');
+const upstreamLib = require('./upstream');
 
 const FIND_SKILL = 'find_skill';
 const MAX_LOOPS = 4;
@@ -51,42 +51,8 @@ function findSkillCalls(response) {
   return output.filter((item) => item && item.type === 'function_call' && item.name === FIND_SKILL);
 }
 
-function requestJson(url, body) {
-  return new Promise((resolve, reject) => {
-    const u = new URL(url);
-    const payload = JSON.stringify(body);
-    const req = http.request({
-      protocol: u.protocol,
-      hostname: u.hostname,
-      port: u.port || undefined,
-      path: u.pathname + u.search,
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'content-length': Buffer.byteLength(payload),
-      },
-    }, (res) => {
-      let data = '';
-      res.setEncoding('utf8');
-      res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => {
-        let parsed = null;
-        try { parsed = JSON.parse(data); } catch {}
-        if (res.statusCode >= 200 && res.statusCode < 300) {
-          resolve(parsed == null ? data : parsed);
-          return;
-        }
-        const msg = parsed && parsed.error ? parsed.error : (data || res.statusMessage);
-        reject(new Error('HTTP ' + res.statusCode + ': ' + (typeof msg === 'object' ? JSON.stringify(msg) : msg)));
-      });
-    });
-    req.on('error', reject);
-    req.end(payload);
-  });
-}
-
 async function postResponses(upstream, body) {
-  return requestJson('http://' + upstream.host + ':' + upstream.port + '/v1/responses', body);
+  return upstreamLib.requestJson(upstream, body);
 }
 
 // Fulfill one find_skill call: search the enabled-skill index and format paths.
