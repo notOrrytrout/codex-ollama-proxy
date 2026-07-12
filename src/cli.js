@@ -49,6 +49,23 @@ function run(command, args, options = {}) {
   return result;
 }
 
+function sleepMs(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function bootstrapLaunchAgent() {
+  let lastResult = null;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    lastResult = run('launchctl', ['bootstrap', `gui/${process.getuid()}`, PLIST], {
+      check: false,
+      stdio: attempt === 5 ? 'inherit' : 'pipe',
+    });
+    if (lastResult.status === 0) return;
+    if (attempt < 5) sleepMs(250);
+  }
+  process.exit(lastResult?.status ?? 1);
+}
+
 function parseFlags(argv) {
   const flags = {};
   const rest = [];
@@ -158,7 +175,7 @@ function install() {
   fs.mkdirSync(path.dirname(PLIST), { recursive: true });
   fs.writeFileSync(PLIST, renderPlist(), 'utf8');
   run('launchctl', ['bootout', `gui/${process.getuid()}/${LABEL}`], { check: false });
-  run('launchctl', ['bootstrap', `gui/${process.getuid()}`, PLIST]);
+  bootstrapLaunchAgent();
   run('launchctl', ['enable', `gui/${process.getuid()}/${LABEL}`], { check: false });
   run('launchctl', ['kickstart', '-k', `gui/${process.getuid()}/${LABEL}`], { check: false });
 }

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1
+
+- Fixed `codex-ollama-proxy install` on macOS by retrying `launchctl bootstrap` briefly after `bootout`, avoiding transient `Bootstrap failed: 5: Input/output error` failures while launchd releases the previous job.
+- Updated npm install instructions in the README.
+
 ## 0.2.0
 
 - Added proxy-fulfilled image generation with Gemini/OpenAI backends, prompt enhancement, saved image outputs, and Codex UI image-generation markers.
