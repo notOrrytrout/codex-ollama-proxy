@@ -198,6 +198,8 @@ When `tool_search` returns deferred MCP/plugin namespace tools, the proxy also e
 }
 ```
 
+When `find_skill` is enabled, startup builds a filesystem-backed skill index immediately and refreshes it against Codex's exact enabled-skill inventory in the background. The first response and first skill lookup do not wait for the Codex app-server scan.
+
 ## How apply_patch Translation Works
 
 Codex may expose `apply_patch` as a custom/freeform tool. The proxy preserves the freeform custom tool behavior for Codex while making the surrounding tool list easier for local or custom Responses API providers to handle.

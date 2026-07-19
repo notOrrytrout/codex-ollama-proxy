@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Removed the multi-second cold `find_skill` stall by serving an immediate filesystem index while the exact Codex app-server inventory refreshes asynchronously.
+- Replaced blocking app-server skill discovery during startup with one nonblocking interactive process.
+
 ## 0.3.3
 
 - Fixed newer Codex/Desktop `tool_search` exposure where the tool arrives as a native `type: "tool_search"` managed tool instead of a plain function definition.
