@@ -21,7 +21,8 @@ const PROXY_PORT = process.env.PROXY_PORT || '11436';
 function usage() {
   console.log(`Usage:
   codex-ollama-proxy init [--force]
-  codex-ollama-proxy serve
+  codex-ollama-proxy serve [--adaptor chat-completion]
+  codex-ollama-proxy serve --adaptor chat-completion [--completion-model MODEL] [--adaptor-port PORT]
   codex-ollama-proxy status
   codex-ollama-proxy switch openai
   codex-ollama-proxy switch ollama [--model MODEL]
@@ -115,6 +116,13 @@ function readRouteConfig() {
   return fs.readFileSync(ROUTE_CONFIG, 'utf8');
 }
 
+function readRouteValue(text, key, fallback = '') {
+  const quoted = text.match(new RegExp('^\\s*' + key + '\\s*=\\s*"([^"]*)"', 'm'));
+  if (quoted) return quoted[1];
+  const bare = text.match(new RegExp('^\\s*' + key + '\\s*=\\s*([^\\s#]+)', 'm'));
+  return bare ? bare[1] : fallback;
+}
+
 function writeRouteValue(text, key, value) {
   const rendered = typeof value === 'boolean' ? String(value) : `"${value}"`;
   const pattern = new RegExp(`^(\\s*${key}\\s*=\\s*)(?:\"[^\"]*\"|true|false).*`, 'm');
@@ -193,6 +201,38 @@ function status() {
   req.on('error', (e) => console.log(`\nproxy=http://127.0.0.1:${PROXY_PORT} status=unreachable (${e.message})`));
 }
 
+function probeJson(port, requestPath, timeoutMs = 750) {
+  return new Promise((resolve) => {
+    const req = http.get({
+      host: '127.0.0.1',
+      port,
+      path: requestPath,
+      timeout: timeoutMs,
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => {
+        const raw = Buffer.concat(chunks).toString('utf8');
+        let body = null;
+        try { body = JSON.parse(raw); } catch {}
+        resolve({ statusCode: res.statusCode || 0, body, raw });
+      });
+    });
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ statusCode: 0, body: null, raw: '', error: 'timeout' });
+    });
+    req.on('error', (error) => resolve({ statusCode: 0, body: null, raw: '', error: error.message }));
+  });
+}
+
+function isHealthyProxyModelsResponse(probe) {
+  if (!probe || probe.statusCode < 200 || probe.statusCode >= 500 || !probe.body) return false;
+  if (probe.body.object === 'list' && Array.isArray(probe.body.data)) return true;
+  if (Array.isArray(probe.body.models) || Array.isArray(probe.body.data)) return true;
+  return false;
+}
+
 function renderPlist() {
   const template = fs.readFileSync(path.join(PACKAGE_DIR, 'config', 'launchd.plist.template'), 'utf8');
   return template
@@ -221,6 +261,64 @@ function uninstall() {
 function logs(flags) {
   const n = String(flags.tail || 100);
   run('tail', ['-n', n, path.join(RUNTIME_DIR, 'proxy.log')]);
+}
+
+async function serveCmd(flags = {}) {
+  if (!process.env.PROXY_PORT) process.env.PROXY_PORT = PROXY_PORT;
+  const proxyPort = parseInt(process.env.PROXY_PORT || PROXY_PORT, 10);
+  const existingProxy = await probeJson(proxyPort, '/v1/models');
+  if (isHealthyProxyModelsResponse(existingProxy)) {
+    console.log(`already_running=http://127.0.0.1:${proxyPort}`);
+    console.log('Use `codex-ollama-proxy status` to inspect it, or stop the existing process before restarting.');
+    return null;
+  }
+  if (!flags.adaptor) return require('./proxy').startServer();
+  if (flags.adaptor !== 'chat-completion') {
+    die('Error: --adaptor must be "chat-completion".');
+  }
+
+  const routeConfig = readRouteConfig();
+  const adaptorPort = String(flags.adaptorPort || process.env.CHAT_COMPLETION_ADAPTOR_PORT || process.env.COMPLETION_ADAPTOR_PORT || '8787');
+  const providerUrl = readRouteValue(routeConfig, 'upstream_url');
+  const providerApiKey = readRouteValue(routeConfig, 'upstream_api_key');
+  const providerModel = flags.completionModel || readRouteValue(routeConfig, 'text_model');
+  if (!providerUrl) die('Error: configure the chat-completion provider with: codex-ollama-proxy upstream --url URL [--api-key KEY]');
+
+  const adaptor = require('../adaptor/completion-api-adaptor');
+  const adaptorServer = adaptor.startServer({
+    port: parseInt(adaptorPort, 10),
+    baseUrl: providerUrl,
+    apiKey: providerApiKey,
+    defaultModel: providerModel,
+  });
+
+  process.env.PROXY_UPSTREAM_URL = `http://127.0.0.1:${adaptorPort}/v1`;
+  process.env.PROXY_UPSTREAM_API_KEY = '';
+  const proxyServer = require('./proxy').startServer();
+
+  function closeServer(server) {
+    try {
+      if (server && server.listening) server.close(() => {});
+    } catch {}
+  }
+  adaptorServer.once('error', (error) => {
+    if (error && error.code === 'EADDRINUSE') {
+      closeServer(proxyServer);
+    }
+  });
+  proxyServer.once('error', (error) => {
+    if (error && error.code === 'EADDRINUSE') {
+      closeServer(adaptorServer);
+    }
+  });
+
+  function shutdown() {
+    closeServer(proxyServer);
+    closeServer(adaptorServer);
+  }
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
+  return proxyServer;
 }
 
 
@@ -286,12 +384,12 @@ function readImagineConfig() {
   }
   return cfg;
 }
-function main() {
+async function main() {
   const [command, subcommand, ...tail] = process.argv.slice(2);
   const parsed = parseFlags(command === 'switch' ? tail : process.argv.slice(3));
   if (!command || command === '-h' || command === '--help') return usage();
   if (command === 'init') return init(parseFlags(process.argv.slice(3)).flags);
-  if (command === 'serve') return require('./proxy').startServer();
+  if (command === 'serve') return await serveCmd(parseFlags(process.argv.slice(2)).flags);
   if (command === 'status') return status();
   if (command === 'switch') return switchMode(subcommand, parsed.flags);
   if (command === 'route') return route(parseFlags(process.argv.slice(2)).flags);
@@ -308,4 +406,7 @@ function main() {
   process.exit(1);
 }
 
-main();
+main().catch((error) => {
+  console.error(error && error.message ? error.message : String(error));
+  process.exit(1);
+});

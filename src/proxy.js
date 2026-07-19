@@ -99,7 +99,7 @@ function forceImageCapabilityForTextModel() {
 }
 forceImageCapabilityForTextModel();
 
-const LISTEN_PORT = parseInt(process.env.PROXY_PORT || '11435', 10);
+const LISTEN_PORT = parseInt(process.env.PROXY_PORT || '11436', 10);
 
 const TOOL_SEARCH = 'tool_search';
 const WEB_SEARCH = 'web_search';
@@ -1317,6 +1317,15 @@ const server = http.createServer((clientReq, clientRes) => {
 });
 
 function startServer(port = LISTEN_PORT) {
+  server.once('error', (error) => {
+    if (error && error.code === 'EADDRINUSE') {
+      log('port already in use: 127.0.0.1:' + port);
+      log('Set PROXY_PORT to another port, or stop the existing proxy before starting this one.');
+      process.exitCode = 1;
+      return;
+    }
+    throw error;
+  });
   server.listen(port, '127.0.0.1', () => {
     log('listening on 127.0.0.1:' + port + ' -> ' + upstreamLib.displayUrl(getUpstream()));
   });

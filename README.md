@@ -54,6 +54,39 @@ codex-ollama-proxy restart
 
 The upstream must expose a compatible Responses API. Chat Completions-only APIs (`/v1/chat/completions`) need a separate adapter and are not supported by this setting alone.
 
+## Use A Chat Completions Provider
+
+For providers that expose `/v1/chat/completions` but not `/v1/responses`, keep
+using the normal upstream configuration and start the built-in completion API
+adaptor:
+
+```bash
+codex-ollama-proxy upstream --url "https://provider.example/v1" --api-key "KEY"
+codex-ollama-proxy route --text-model "MODEL" --image-model "MODEL" --auto-image
+codex-ollama-proxy serve --adaptor chat-completion
+```
+
+The proxy starts a local adaptor and forwards Codex traffic through it. The
+provider URL and key come from the existing `upstream` config, so there is no
+separate API-key path for the adaptor.
+
+NVIDIA example:
+
+```bash
+export NVIDIA_API_KEY="nvapi-..."
+
+codex-ollama-proxy upstream \
+  --url "https://integrate.api.nvidia.com/v1" \
+  --api-key "$NVIDIA_API_KEY"
+
+codex-ollama-proxy route \
+  --text-model "z-ai/glm-5.2" \
+  --image-model "thinkingmachines/inkling" \
+  --auto-image
+
+codex-ollama-proxy serve --adaptor chat-completion
+```
+
 ## Configure Upstream Responses API
 
 Set or inspect the upstream Responses API server:

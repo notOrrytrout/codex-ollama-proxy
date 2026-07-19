@@ -35,6 +35,8 @@
     "codex-ollama-proxy": "bin/codex-ollama-proxy"
   },
   "files": [
+    "adaptor/completion-api-adaptor.js",
+    "adaptor/README.md",
     "bin/",
     "config/",
     "scripts/",
@@ -48,7 +50,7 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "check": "node --check src/cli.js && node --check src/proxy.js && node --check src/codex-config.js",
+    "check": "node --check src/cli.js && node --check src/proxy.js && node --check src/codex-config.js && node --check adaptor/completion-api-adaptor.js",
     "smoke": "scripts/smoke-test.sh"
   },
   "engines": {
