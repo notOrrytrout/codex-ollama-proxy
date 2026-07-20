@@ -4,6 +4,9 @@
 
 - Removed the multi-second cold `find_skill` stall by serving an immediate filesystem index while the exact Codex app-server inventory refreshes asynchronously.
 - Replaced blocking app-server skill discovery during startup with one nonblocking interactive process.
+- Stabilized streamed Responses lifecycles so `[DONE]`, EOF, and upstream completion produce one ordered `response.completed` event.
+- Upstream failures now produce a complete `response.created` → `response.in_progress` → `response.failed` lifecycle instead of closing silently.
+- Client disconnects now cancel the active upstream stream, and proxy-fulfilled multi-turn streams preserve one lifecycle through the final assistant response.
 - Fixed image auto-routing to honor `auto_route_image = false` and inspect only the active user turn, so current attachments and Computer Use screenshots use the vision model without historical images pinning later text-only turns.
 - Added an explicit Ollama backend to the existing `generate_image` tool, using native `/api/generate` without prompt classification or chat rerouting.
 - Kept Gemini and OpenAI image generation unchanged, and added an independent Ollama base URL so any supported Responses provider can remain configured for text.
