@@ -7,15 +7,16 @@ const DEFAULTS = {
   imagine_enabled: false,
   imagine_service: 'gemini',
   imagine_model: '',
+  imagine_base_url: '',
   imagine_api_key: '',
   imagine_quality: 'fast',
   imagine_enhance: false,
   imagine_aspect_ratio: '1:1',
 };
 
-const STRING_FIELDS = ['imagine_service', 'imagine_model', 'imagine_api_key', 'imagine_quality', 'imagine_aspect_ratio'];
+const STRING_FIELDS = ['imagine_service', 'imagine_model', 'imagine_base_url', 'imagine_api_key', 'imagine_quality', 'imagine_aspect_ratio'];
 const BOOL_FIELDS = ['imagine_enabled', 'imagine_enhance'];
-const FIELDS = [...BOOL_FIELDS.slice(0, 1), ...STRING_FIELDS.slice(0, 3), 'imagine_quality', 'imagine_enhance', 'imagine_aspect_ratio'];
+const FIELDS = [...BOOL_FIELDS.slice(0, 1), ...STRING_FIELDS.slice(0, 4), 'imagine_quality', 'imagine_enhance', 'imagine_aspect_ratio'];
 
 function escapeTomlString(value) {
   return String(value).replace(/\\/gu, '\\\\').replace(/"/gu, '\\"');
@@ -41,6 +42,7 @@ function render(config) {
     `imagine_enabled = ${config.imagine_enabled ? 'true' : 'false'}`,
     `imagine_service = "${escapeTomlString(config.imagine_service)}"`,
     `imagine_model = "${escapeTomlString(config.imagine_model)}"`,
+    `imagine_base_url = "${escapeTomlString(config.imagine_base_url)}"`,
     `imagine_api_key = "${escapeTomlString(config.imagine_api_key)}"`,
     `imagine_quality = "${escapeTomlString(config.imagine_quality)}"`,
     `imagine_enhance = ${config.imagine_enhance ? 'true' : 'false'}`,
@@ -60,6 +62,7 @@ function read(file) {
     imagine_enabled: readTomlBool(text, 'imagine_enabled', DEFAULTS.imagine_enabled),
     imagine_service: readTomlString(text, 'imagine_service', DEFAULTS.imagine_service),
     imagine_model: readTomlString(text, 'imagine_model', DEFAULTS.imagine_model),
+    imagine_base_url: readTomlString(text, 'imagine_base_url', DEFAULTS.imagine_base_url),
     imagine_api_key: readTomlString(text, 'imagine_api_key', DEFAULTS.imagine_api_key),
     imagine_quality: readTomlString(text, 'imagine_quality', DEFAULTS.imagine_quality),
     imagine_enhance: readTomlBool(text, 'imagine_enhance', DEFAULTS.imagine_enhance),

@@ -15,7 +15,7 @@ const CODEX_DIR = process.env.CODEX_HOME || path.join(process.env.HOME, '.codex'
 const RUNTIME_DIR = path.join(CODEX_DIR, 'ollama-shape-proxy');
 const PROXY_MODELS_PATH = path.join(RUNTIME_DIR, 'proxy-models.toml');
 const UPSTREAM_BODY_LOG = path.join(RUNTIME_DIR, 'upstream-bodies.jsonl');
-const ROUTE_CFG = { text_model: null, image_model: null, auto_route_image: false, verbose_tools: false, log_upstream_body: false, enable_find_skill: false, stream_proxy_loop: true, upstream_url: upstreamLib.DEFAULT_UPSTREAM_URL, upstream_api_key: "", imagine_enabled: false, imagine_service: "gemini", imagine_model: "", imagine_api_key: "", imagine_quality: "fast", imagine_enhance: false, imagine_aspect_ratio: "1:1" };
+const ROUTE_CFG = { text_model: null, image_model: null, auto_route_image: false, verbose_tools: false, log_upstream_body: false, enable_find_skill: false, stream_proxy_loop: true, upstream_url: upstreamLib.DEFAULT_UPSTREAM_URL, upstream_api_key: "", imagine_enabled: false, imagine_service: "gemini", imagine_model: "", imagine_base_url: "", imagine_api_key: "", imagine_quality: "fast", imagine_enhance: false, imagine_aspect_ratio: "1:1" };
 function loadRouteConfig() {
   try {
     const raw = fs.readFileSync(PROXY_MODELS_PATH, 'utf8');
@@ -401,38 +401,35 @@ function collectCustomToolInfo(tools) {
   return { customNames };
 }
 
-// Detect whether any input message carries actual image content.
-// A historical view_image function_call is not enough by itself: after the app
-// executes view_image, the follow-up turn may only need to summarize or return
-// the generated image path. Routing those turns to the vision model has caused
-// the stream to hang, so only route when image content is present.
-function requestHasImage(body) {
+const IMAGE_BLOCK_TYPES = new Set(['input_image', 'output_image', 'image']);
+
+function contentHasImage(content) {
+  if (!Array.isArray(content)) return false;
+  return content.some((block) => block && typeof block === 'object' && (
+    IMAGE_BLOCK_TYPES.has(block.type) ||
+    block.image_url ||
+    block.file_id
+  ));
+}
+
+// Detect images only in the active turn: the latest user message and any tool
+// outputs that follow it. Responses requests replay conversation history, so a
+// screenshot from an older turn must not pin later text-only turns to the
+// vision model. Requests without a user message are treated as continuations
+// and inspected in full so a current tool-produced screenshot still routes.
+function activeTurnHasImage(body) {
   if (!body || !Array.isArray(body.input)) return false;
-  for (const item of body.input) {
+  let activeTurnStart = 0;
+  for (let i = body.input.length - 1; i >= 0; i -= 1) {
+    const item = body.input[i];
+    if (item && item.type === 'message' && item.role === 'user') {
+      activeTurnStart = i;
+      break;
+    }
+  }
+  for (const item of body.input.slice(activeTurnStart)) {
     if (!item || typeof item !== 'object') continue;
-    const content = item.content;
-    if (Array.isArray(content)) {
-      for (const block of content) {
-        if (block && typeof block === 'object' && (
-          block.type === 'input_image' ||
-          block.type === 'output_image' ||
-          block.type === 'image' ||
-          block.image_url ||
-          block.file_id
-        )) return true;
-      }
-    }
-    if (item.type === 'function_call_output' && Array.isArray(item.output)) {
-      for (const block of item.output) {
-        if (block && typeof block === 'object' && (
-          block.type === 'input_image' ||
-          block.type === 'output_image' ||
-          block.type === 'image' ||
-          block.image_url ||
-          block.file_id
-        )) return true;
-      }
-    }
+    if (contentHasImage(item.content) || contentHasImage(item.output)) return true;
   }
   return false;
 }
@@ -440,10 +437,11 @@ function requestHasImage(body) {
 // Apply per-request model routing based on the config + presence of an image.
 function applyModelRouting(body) {
   if (!body || typeof body !== 'object') return body;
-  const hasImage = requestHasImage(body);
-  debugLog('auto-route: requestHasImage=' + hasImage + ' model="' + body.model + '" image_model="' + ROUTE_CFG.image_model + '"');
+  if (!ROUTE_CFG.auto_route_image) return body;
+  const hasImage = activeTurnHasImage(body);
+  debugLog('auto-route: activeTurnHasImage=' + hasImage + ' model="' + body.model + '" image_model="' + ROUTE_CFG.image_model + '"');
   if (hasImage) {
-    if (body.model !== ROUTE_CFG.image_model) {
+    if (ROUTE_CFG.image_model && body.model !== ROUTE_CFG.image_model) {
       debugLog('auto-route: request has image -> model "' + body.model + '" -> "' + ROUTE_CFG.image_model + '"');
       body.model = ROUTE_CFG.image_model;
     }
