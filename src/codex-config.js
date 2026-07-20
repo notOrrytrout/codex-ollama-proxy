@@ -22,6 +22,7 @@ const PROVIDER_NAME = 'ollama-launch-codex-app';
 const STOREFRONT_PLUGIN_PREFIX = '[plugins."storefront-builder@personal"';
 const OLLAMA_PROVIDER_HEADER = `[model_providers.${PROVIDER_NAME}]`;
 const OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
+const OLLAMA_SHOW_CONCURRENCY = 10;
 
 const TOOL_CAPABILITY_FIELDS = [
   'apply_patch_tool_type',
@@ -418,12 +419,30 @@ async function fetchJson(url, timeoutMs = 5000, body = null) {
   }
 }
 
+async function mapLimit(values, limit, mapper) {
+  const output = new Array(values.length);
+  let next = 0;
+
+  async function worker() {
+    while (next < values.length) {
+      const index = next++;
+      output[index] = await mapper(values[index], index);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(limit, values.length) }, worker));
+  return output;
+}
+
 async function localOllamaModels() {
   const tags = (await fetchJson(`${OLLAMA_BASE_URL}/api/tags`)) || {};
   const out = {};
+  const showNames = new Set();
   for (const m of Array.isArray(tags.models) ? tags.models : []) {
     const name = m.name || m.model;
-    if (name) out[name] = Array.isArray(m.capabilities) ? m.capabilities : [];
+    if (!name) continue;
+    if (Array.isArray(m.capabilities)) out[name] = m.capabilities;
+    else showNames.add(name);
   }
   if (exists(MODEL_CATALOG)) {
     let catalog = {};
@@ -434,16 +453,18 @@ async function localOllamaModels() {
     }
     for (const entry of Array.isArray(catalog.models) ? catalog.models : []) {
       const slug = entry && entry.slug;
-      if (slug && !Object.prototype.hasOwnProperty.call(out, slug)) {
-        const show = (await fetchJson(
-          `${OLLAMA_BASE_URL}/api/show`,
-          8000,
-          JSON.stringify({ name: slug }),
-        )) || {};
-        if (Array.isArray(show.capabilities)) out[slug] = show.capabilities;
-      }
+      if (slug && !Object.prototype.hasOwnProperty.call(out, slug)) showNames.add(slug);
     }
   }
+  await mapLimit([...showNames], OLLAMA_SHOW_CONCURRENCY, async (name) => {
+    const show = (await fetchJson(
+      `${OLLAMA_BASE_URL}/api/show`,
+      8000,
+      JSON.stringify({ model: name }),
+    )) || {};
+    // A failed lookup means capabilities are unknown, not authoritatively empty.
+    if (Array.isArray(show.capabilities)) out[name] = show.capabilities;
+  });
   return out;
 }
 
@@ -628,8 +649,10 @@ if (require.main === module) {
 
 module.exports = {
   FRESH_INSTRUCTION_FIELDS,
+  OLLAMA_SHOW_CONCURRENCY,
   canonicalInstructionValuesFromCache,
   applyFreshInstructionValues,
+  localOllamaModels,
   refreshCatalog,
   main,
 };

@@ -10,6 +10,7 @@
 - Fixed image auto-routing to honor `auto_route_image = false` and inspect only the active user turn, so current attachments and Computer Use screenshots use the vision model without historical images pinning later text-only turns.
 - Added an explicit Ollama backend to the existing `generate_image` tool, using native `/api/generate` without prompt classification or chat rerouting.
 - Kept Gemini and OpenAI image generation unchanged, and added an independent Ollama base URL so any supported Responses provider can remain configured for text.
+- Fixed local Ollama capability discovery by querying `/api/show` with bounded concurrency when `/api/tags` omits capabilities, while preserving unknown results on lookup failures.
 
 ## 0.3.3
 
