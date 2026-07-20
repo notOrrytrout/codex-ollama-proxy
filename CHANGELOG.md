@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fixed image auto-routing to honor `auto_route_image = false` and inspect only the active user turn, so current attachments and Computer Use screenshots use the vision model without historical images pinning later text-only turns.
+
 ## 0.3.3
 
 - Fixed newer Codex/Desktop `tool_search` exposure where the tool arrives as a native `type: "tool_search"` managed tool instead of a plain function definition.
