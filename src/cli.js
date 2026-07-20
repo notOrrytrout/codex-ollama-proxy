@@ -41,8 +41,9 @@ function usage() {
   codex-ollama-proxy install
   codex-ollama-proxy uninstall
   codex-ollama-proxy restart
-  codex-ollama-proxy imagine [--enable|--disable] [--service gemini|openai --model MODEL]
-  codex-ollama-proxy imagine [--api-key KEY] [--quality fast|balanced|quality]
+  codex-ollama-proxy imagine [--enable|--disable] [--service gemini|openai|ollama --model MODEL]
+  codex-ollama-proxy imagine [--base-url URL] [--api-key KEY]
+  codex-ollama-proxy imagine [--quality fast|balanced|quality]
   codex-ollama-proxy imagine [--enhance|--no-enhance] [--aspect-ratio RATIO]
   codex-ollama-proxy imagine --status
   codex-ollama-proxy imagine --doctor`);
@@ -550,8 +551,8 @@ async function runPreset(name, flags = {}) {
 }
 
 async function imagineCmd(flags) {
+  const imagine = require('./imagine');
   if (flags.doctor) {
-    const imagine = require("./imagine");
     const config = readImagineConfig();
     console.log("Image generation provider health check:");
     imagine.checkHealth(config).then((results) => {
@@ -565,7 +566,7 @@ async function imagineCmd(flags) {
   }
   if (flags.status) {
     const config = imagineConfig.read(IMAGINE_CONFIG);
-    const fields = ["imagine_enabled", "imagine_service", "imagine_model", "imagine_api_key", "imagine_quality", "imagine_enhance", "imagine_aspect_ratio"];
+    const fields = ["imagine_enabled", "imagine_service", "imagine_model", "imagine_base_url", "imagine_api_key", "imagine_quality", "imagine_enhance", "imagine_aspect_ratio"];
     console.log("Image generation configuration:");
     for (const f of fields) {
       const val = config[f];
@@ -573,6 +574,9 @@ async function imagineCmd(flags) {
       console.log("  " + f + " = " + display);
     }
     return;
+  }
+  if (flags.service && !imagine.SUPPORTED_IMAGE_SERVICES.includes(flags.service)) {
+    die('Error: --service must be one of: ' + imagine.SUPPORTED_IMAGE_SERVICES.join(', '));
   }
   // --service and --model must always be updated as a pair to prevent
   // mismatched provider/model combinations (e.g. a Gemini model with OpenAI service).
@@ -589,6 +593,15 @@ async function imagineCmd(flags) {
   if (flags.disable) updates.imagine_enabled = false;
   if (flags.service) updates.imagine_service = flags.service;
   if (flags.model) updates.imagine_model = flags.model;
+  if (flags.baseUrl) {
+    try {
+      const url = new URL(flags.baseUrl);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('must use http or https');
+    } catch (err) {
+      die('Error: --base-url must be an absolute http(s) URL. ' + err.message);
+    }
+    updates.imagine_base_url = flags.baseUrl;
+  }
   if (flags.apiKey) updates.imagine_api_key = flags.apiKey;
   if (flags.quality) updates.imagine_quality = flags.quality;
   if (flags.enhance) updates.imagine_enhance = true;
