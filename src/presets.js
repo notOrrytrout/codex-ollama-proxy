@@ -56,9 +56,6 @@ function renderPresetToml(preset) {
     `image_model = "${escapeTomlString(preset.image_model)}"`,
     `auto_route_image = ${preset.auto_route_image ? 'true' : 'false'}`,
   );
-  if (preset.imagine_enabled !== undefined) {
-    lines.push(`imagine_enabled = ${preset.imagine_enabled ? 'true' : 'false'}`);
-  }
   lines.push('');
   return lines.join('\n');
 }
@@ -72,7 +69,6 @@ function normalizePreset(name, text) {
     text_model: readTomlString(text, 'text_model'),
     image_model: readTomlString(text, 'image_model'),
     auto_route_image: readTomlBool(text, 'auto_route_image', false),
-    imagine_enabled: readTomlBool(text, 'imagine_enabled', undefined),
   };
   if (!preset.adaptor || !preset.upstream_url || !preset.text_model) {
     die(`Error: preset ${name} is missing adaptor, upstream_url, or text_model.`);
@@ -114,8 +110,6 @@ function addPreset(runtimeDir, name, flags, log = console.log) {
     text_model: flags.textModel,
     image_model: flags.imageModel || flags.textModel,
     auto_route_image: Boolean(flags.autoImage) && !flags.noAutoImage,
-    ...(flags.imagineEnable ? { imagine_enabled: true } : {}),
-    ...(flags.imagineDisable ? { imagine_enabled: false } : {}),
   };
   const file = presetPath(runtimeDir, name);
   fs.writeFileSync(file, renderPresetToml(preset), 'utf8');

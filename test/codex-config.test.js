@@ -206,7 +206,7 @@ test('CLI preset add can store API key when requested', () => {
   }
 });
 
-test('CLI preset add can persist imagine_enabled and preset use applies it', () => {
+test('CLI imagine config is separate from presets and composes into route', () => {
   const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-cli-preset-imagine-'));
   const runtimeDir = path.join(codexHome, 'ollama-shape-proxy');
   fs.mkdirSync(runtimeDir, { recursive: true });
@@ -227,7 +227,6 @@ test('CLI preset add can persist imagine_enabled and preset use applies it', () 
       '--image-model',
       'thinkingmachines/inkling',
       '--auto-image',
-      '--imagine-enable',
     ], {
       cwd: path.join(__dirname, '..'),
       env: Object.assign({}, process.env, { CODEX_HOME: codexHome }),
@@ -236,7 +235,7 @@ test('CLI preset add can persist imagine_enabled and preset use applies it', () 
 
     assert.equal(add.status, 0, add.stderr || add.stdout);
     const preset = fs.readFileSync(path.join(runtimeDir, 'presets', 'nvidia.toml'), 'utf8');
-    assert.match(preset, /^imagine_enabled\s*=\s*true$/m);
+    assert.doesNotMatch(preset, /^imagine_/m);
 
     const use = spawnSync(process.execPath, [
       path.join(__dirname, '..', 'bin', 'codex-ollama-proxy'),
@@ -253,8 +252,62 @@ test('CLI preset add can persist imagine_enabled and preset use applies it', () 
     });
 
     assert.equal(use.status, 0, use.stderr || use.stdout);
-    const route = fs.readFileSync(path.join(runtimeDir, 'proxy-models.toml'), 'utf8');
-    assert.match(route, /^imagine_enabled\s*=\s*true$/m);
+    let route = fs.readFileSync(path.join(runtimeDir, 'proxy-models.toml'), 'utf8');
+    assert.match(route, /^imagine_enabled\s*=\s*false$/m);
+
+    const imagine = spawnSync(process.execPath, [
+      path.join(__dirname, '..', 'bin', 'codex-ollama-proxy'),
+      'imagine',
+      '--enable',
+      '--service',
+      'gemini',
+      '--model',
+      'gemini-2.5-flash-image',
+      '--api-key',
+      'gemini-secret',
+      '--quality',
+      'quality',
+      '--enhance',
+      '--aspect-ratio',
+      '16:9',
+      '--no-start',
+    ], {
+      cwd: path.join(__dirname, '..'),
+      env: Object.assign({}, process.env, { CODEX_HOME: codexHome }),
+      encoding: 'utf8',
+    });
+
+    assert.equal(imagine.status, 0, imagine.stderr || imagine.stdout);
+    const imagineConfig = fs.readFileSync(path.join(runtimeDir, 'imagine.toml'), 'utf8');
+    assert.match(imagineConfig, /^imagine_enabled\s*=\s*true$/m);
+    assert.match(imagineConfig, /^imagine_service\s*=\s*"gemini"$/m);
+    assert.match(imagineConfig, /^imagine_model\s*=\s*"gemini-2\.5-flash-image"$/m);
+    assert.match(imagineConfig, /^imagine_api_key\s*=\s*"gemini-secret"$/m);
+    assert.match(imagineConfig, /^imagine_quality\s*=\s*"quality"$/m);
+    assert.match(imagineConfig, /^imagine_enhance\s*=\s*true$/m);
+    assert.match(imagineConfig, /^imagine_aspect_ratio\s*=\s*"16:9"$/m);
+    const updatedPreset = fs.readFileSync(path.join(runtimeDir, 'presets', 'nvidia.toml'), 'utf8');
+    assert.doesNotMatch(updatedPreset, /^imagine_/m);
+    route = fs.readFileSync(path.join(runtimeDir, 'proxy-models.toml'), 'utf8');
+    assert.match(route, /^imagine_api_key\s*=\s*"gemini-secret"$/m);
+
+    const noKeyImagine = spawnSync(process.execPath, [
+      path.join(__dirname, '..', 'bin', 'codex-ollama-proxy'),
+      'imagine',
+      '--service',
+      'gemini',
+      '--model',
+      'gemini-2.5-flash-image',
+      '--no-start',
+    ], {
+      cwd: path.join(__dirname, '..'),
+      env: Object.assign({}, process.env, { CODEX_HOME: codexHome }),
+      encoding: 'utf8',
+    });
+
+    assert.equal(noKeyImagine.status, 0, noKeyImagine.stderr || noKeyImagine.stdout);
+    const preservedImagineConfig = fs.readFileSync(path.join(runtimeDir, 'imagine.toml'), 'utf8');
+    assert.match(preservedImagineConfig, /^imagine_api_key\s*=\s*"gemini-secret"$/m);
   } finally {
     fs.rmSync(codexHome, { recursive: true, force: true });
   }

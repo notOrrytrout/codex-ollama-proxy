@@ -6,11 +6,13 @@ const http = require('http');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const presets = require('./presets');
+const imagineConfig = require('./imagine-config');
 
 const PACKAGE_DIR = path.resolve(__dirname, '..');
 const CODEX_DIR = process.env.CODEX_HOME || path.join(process.env.HOME, '.codex');
 const RUNTIME_DIR = path.join(CODEX_DIR, 'ollama-shape-proxy');
 const ROUTE_CONFIG = path.join(RUNTIME_DIR, 'proxy-models.toml');
+const IMAGINE_CONFIG = path.join(RUNTIME_DIR, 'imagine.toml');
 const DEFAULT_ROUTE_CONFIG = path.join(PACKAGE_DIR, 'config', 'proxy-models.default.toml');
 const DEFAULT_MODEL_CATALOG = path.join(PACKAGE_DIR, 'config', 'model-catalogs', 'ollama-launch-models.default.json');
 const MODEL_CATALOG = path.join(CODEX_DIR, 'ollama-launch-models-ollama-working.json');
@@ -25,7 +27,7 @@ function usage() {
   codex-ollama-proxy serve [--adaptor chat-completion]
   codex-ollama-proxy serve --preset NAME [--api-key KEY] [--replace]
   codex-ollama-proxy serve --adaptor chat-completion [--completion-model MODEL] [--adaptor-port PORT]
-  codex-ollama-proxy preset add NAME --adaptor chat-completion --url URL --text-model MODEL [--image-model MODEL] [--auto-image|--no-auto-image] [--imagine-enable|--imagine-disable]
+  codex-ollama-proxy preset add NAME --adaptor chat-completion --url URL --text-model MODEL [--image-model MODEL] [--auto-image|--no-auto-image]
   codex-ollama-proxy preset list
   codex-ollama-proxy preset show NAME
   codex-ollama-proxy preset use NAME [--api-key KEY] [--no-start]
@@ -95,7 +97,7 @@ function parseFlags(argv) {
     const eq = arg.indexOf('=');
     const key = (eq >= 0 ? arg.slice(2, eq) : arg.slice(2)).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
     if (eq >= 0) flags[key] = arg.slice(eq + 1);
-    else if (['force', 'auto-image', 'no-auto-image', 'imagine-enable', 'imagine-disable', 'enable', 'disable', 'enhance', 'no-enhance', 'doctor', 'status', 'no-refresh', 'no-backup', 'no-start', 'replace', 'no-replace', 'foreground'].includes(arg.slice(2))) flags[key] = true;
+    else if (['force', 'auto-image', 'no-auto-image', 'imagine-enable', 'imagine-disable', 'imagine-enhance', 'imagine-no-enhance', 'enable', 'disable', 'enhance', 'no-enhance', 'doctor', 'status', 'no-refresh', 'no-backup', 'no-start', 'replace', 'no-replace', 'foreground'].includes(arg.slice(2))) flags[key] = true;
     else flags[key] = argv[++i];
   }
   return { flags, rest };
@@ -103,6 +105,7 @@ function parseFlags(argv) {
 
 function init(options = {}) {
   fs.mkdirSync(RUNTIME_DIR, { recursive: true });
+  imagineConfig.ensure(IMAGINE_CONFIG);
   if (!fs.existsSync(ROUTE_CONFIG) || options.force) {
     fs.copyFileSync(DEFAULT_ROUTE_CONFIG, ROUTE_CONFIG);
     console.log(`created=${ROUTE_CONFIG}`);
@@ -145,6 +148,19 @@ function writeRouteValue(text, key, value) {
   return `${text.replace(/\s+$/u, '')}\n${key} = ${rendered}\n`;
 }
 
+function applyImagineConfigToText(text) {
+  const values = imagineConfig.read(IMAGINE_CONFIG);
+  for (const [key, value] of Object.entries(values)) {
+    text = writeRouteValue(text, key, value);
+  }
+  return text;
+}
+
+function applyImagineConfigToRoute() {
+  const text = applyImagineConfigToText(readRouteConfig());
+  fs.writeFileSync(ROUTE_CONFIG, text, 'utf8');
+}
+
 function applyPreset(name, flags = {}) {
   const preset = presets.readPreset(RUNTIME_DIR, name);
   switchMode('ollama', {
@@ -165,9 +181,8 @@ function applyPreset(name, flags = {}) {
   text = writeRouteValue(text, 'text_model', preset.text_model);
   text = writeRouteValue(text, 'image_model', preset.image_model);
   text = writeRouteValue(text, 'auto_route_image', Boolean(preset.auto_route_image));
-  if (preset.imagine_enabled !== undefined) {
-    text = writeRouteValue(text, 'imagine_enabled', Boolean(preset.imagine_enabled));
-  }
+  text = writeRouteValue(text, 'active_preset', name);
+  text = applyImagineConfigToText(text);
   fs.writeFileSync(ROUTE_CONFIG, text, 'utf8');
   console.log(`preset_applied=${name}`);
   console.log(`updated=${ROUTE_CONFIG}`);
@@ -199,6 +214,7 @@ function resetRouteForOllama(flags = {}) {
     text = writeRouteValue(text, 'text_model', flags.model);
     text = writeRouteValue(text, 'image_model', flags.model);
   }
+  text = applyImagineConfigToText(text);
   fs.writeFileSync(ROUTE_CONFIG, text, 'utf8');
   console.log(`route_reset=ollama (${ROUTE_CONFIG})`);
 }
@@ -209,6 +225,7 @@ function route(flags) {
   if (flags.imageModel) text = writeRouteValue(text, 'image_model', flags.imageModel);
   if (flags.autoImage) text = writeRouteValue(text, 'auto_route_image', true);
   if (flags.noAutoImage) text = writeRouteValue(text, 'auto_route_image', false);
+  text = applyImagineConfigToText(text);
   fs.writeFileSync(ROUTE_CONFIG, text, 'utf8');
   console.log(`updated=${ROUTE_CONFIG}`);
 }
@@ -532,7 +549,7 @@ async function runPreset(name, flags = {}) {
   return startPresetServer(preset, serverFlags);
 }
 
-function imagineCmd(flags) {
+async function imagineCmd(flags) {
   if (flags.doctor) {
     const imagine = require("./imagine");
     const config = readImagineConfig();
@@ -547,19 +564,16 @@ function imagineCmd(flags) {
     return;
   }
   if (flags.status) {
-    const text = readRouteConfig();
-    const fields = ["imagine_enabled", "imagine_service", "imagine_api_key", "imagine_quality", "imagine_enhance", "imagine_aspect_ratio"];
-    fields.splice(2, 0, "imagine_model");
+    const config = imagineConfig.read(IMAGINE_CONFIG);
+    const fields = ["imagine_enabled", "imagine_service", "imagine_model", "imagine_api_key", "imagine_quality", "imagine_enhance", "imagine_aspect_ratio"];
     console.log("Image generation configuration:");
     for (const f of fields) {
-      const m = text.match(new RegExp("^\\s*" + f + "\\s*=\\s*(.*)$", "m"));
-      const val = m ? m[1] : "(not set)";
-      const display = (f === "imagine_api_key" && val && val.length > 2) ? "(set)" : val;
+      const val = config[f];
+      const display = f === "imagine_api_key" && val ? "(set)" : JSON.stringify(val);
       console.log("  " + f + " = " + display);
     }
     return;
   }
-  let text = readRouteConfig();
   // --service and --model must always be updated as a pair to prevent
   // mismatched provider/model combinations (e.g. a Gemini model with OpenAI service).
   if (flags.service && !flags.model) {
@@ -570,28 +584,31 @@ function imagineCmd(flags) {
     die('Error: --model must be used together with --service.\n'
       + 'Example: codex-ollama-proxy imagine --service openai --model gpt-image-2 --api-key "KEY"');
   }
-  if (flags.enable) text = writeRouteValue(text, "imagine_enabled", true);
-  if (flags.disable) text = writeRouteValue(text, "imagine_enabled", false);
-  if (flags.service) text = writeRouteValue(text, "imagine_service", flags.service);
-  if (flags.model) text = writeRouteValue(text, "imagine_model", flags.model);
-  if (flags.apiKey) text = writeRouteValue(text, "imagine_api_key", flags.apiKey);
-  if (flags.quality) text = writeRouteValue(text, "imagine_quality", flags.quality);
-  if (flags.enhance) text = writeRouteValue(text, "imagine_enhance", true);
-  if (flags.noEnhance) text = writeRouteValue(text, "imagine_enhance", false);
-  if (flags.aspectRatio) text = writeRouteValue(text, "imagine_aspect_ratio", flags.aspectRatio);
-  fs.writeFileSync(ROUTE_CONFIG, text, "utf8");
-  console.log("updated=" + ROUTE_CONFIG);
+  const updates = {};
+  if (flags.enable) updates.imagine_enabled = true;
+  if (flags.disable) updates.imagine_enabled = false;
+  if (flags.service) updates.imagine_service = flags.service;
+  if (flags.model) updates.imagine_model = flags.model;
+  if (flags.apiKey) updates.imagine_api_key = flags.apiKey;
+  if (flags.quality) updates.imagine_quality = flags.quality;
+  if (flags.enhance) updates.imagine_enhance = true;
+  if (flags.noEnhance) updates.imagine_enhance = false;
+  if (flags.aspectRatio) updates.imagine_aspect_ratio = flags.aspectRatio;
+  imagineConfig.update(IMAGINE_CONFIG, updates);
+  applyImagineConfigToRoute();
+  console.log("updated=" + IMAGINE_CONFIG);
+  console.log("route_updated=" + ROUTE_CONFIG);
+  const activePreset = readRouteValue(readRouteConfig(), 'active_preset', '');
+  if (activePreset) {
+    if (!flags.noStart) {
+      await startPresetServer(presets.readPreset(RUNTIME_DIR, activePreset), { replace: true });
+    }
+  }
 }
 
 function readImagineConfig() {
-  const text = readRouteConfig();
-  const cfg = { imagine_enabled: false, imagine_service: "gemini", imagine_model: "", imagine_api_key: "", imagine_quality: "fast", imagine_enhance: false, imagine_aspect_ratio: "1:1", text_model: null };
-  for (const line of text.split("\n")) {
-    const m = line.match(/^\s*([A-Za-z_]+)\s*=\s*"([^"]*)"/);
-    if (m && m[1] in cfg) cfg[m[1]] = m[2];
-    const b = line.match(/^\s*([A-Za-z_]+)\s*=\s*(true|false)\b/);
-    if (b && b[1] in cfg) cfg[b[1]] = b[2] === "true";
-  }
+  const cfg = imagineConfig.read(IMAGINE_CONFIG);
+  cfg.text_model = readRouteValue(readRouteConfig(), 'text_model', null);
   return cfg;
 }
 async function main() {
@@ -609,7 +626,7 @@ async function main() {
   if (command === 'logs') return logs(parsed.flags);
   if (command === 'install') return install();
   if (command === 'uninstall') return uninstall();
-  if (command === 'imagine') return imagineCmd(parseFlags(process.argv.slice(2)).flags);
+  if (command === 'imagine') return await imagineCmd(parseFlags(process.argv.slice(2)).flags);
   if (command === 'restart') {
     uninstall();
     return install();

@@ -38,11 +38,14 @@ codex-ollama-proxy preset add nvidia \
   --text-model "z-ai/glm-5.2" \
   --image-model "thinkingmachines/inkling" \
   --auto-image \
-  --imagine-enable \
   --api-key "$NVIDIA_API_KEY"
 
 codex-ollama-proxy run nvidia
 ```
+
+Image generation is configured independently from presets with
+`codex-ollama-proxy imagine`; it is stored in
+`~/.codex/ollama-shape-proxy/imagine.toml` and composed into the active route.
 
 `preset use` and `run` start or restart the proxy and adaptor in the background
 and return your terminal. Use `codex-ollama-proxy logs --tail 100` to inspect

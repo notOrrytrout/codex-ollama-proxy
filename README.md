@@ -79,8 +79,7 @@ codex-ollama-proxy preset add nvidia \
   --url "https://integrate.api.nvidia.com/v1" \
   --text-model "z-ai/glm-5.2" \
   --image-model "thinkingmachines/inkling" \
-  --auto-image \
-  --imagine-enable
+  --auto-image
 
 codex-ollama-proxy preset use nvidia --api-key "$NVIDIA_API_KEY"
 ```
@@ -94,7 +93,6 @@ codex-ollama-proxy preset add nvidia \
   --text-model "z-ai/glm-5.2" \
   --image-model "thinkingmachines/inkling" \
   --auto-image \
-  --imagine-enable \
   --api-key "$NVIDIA_API_KEY"
 
 codex-ollama-proxy run nvidia
@@ -105,6 +103,20 @@ background, wait briefly for the local proxy to respond, print the PID and log
 path, and return the terminal prompt. Use `run --foreground` when you want live
 server logs in the current terminal. Use `--no-start` with `preset use` only
 when you want to write config without starting the proxy.
+
+Image generation is configured separately from presets and applies to every
+route:
+
+```bash
+codex-ollama-proxy imagine \
+  --enable \
+  --service gemini \
+  --model "gemini-2.5-flash-image" \
+  --api-key "$GEMINI_API_KEY"
+```
+
+This writes `~/.codex/ollama-shape-proxy/imagine.toml` and composes those
+settings into the live proxy route whenever you switch Ollama or use a preset.
 
 NVIDIA example:
 
