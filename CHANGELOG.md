@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Refactored presets from a fixed six-field schema into a saved partial `proxy-models.toml` driven by a single shared route-config schema (the keys the proxy already reads). Presets can now pin any non-imagine config toggle (`dedupe_large_input`, `duplicate_input_min_chars`, `verbose_tools`, `log_upstream_body`, `enable_find_skill`, `stream_proxy_loop`, `auto_route_image`) via paired `--flag`/`--no-flag` CLI flags; undeclared keys keep the template default at apply time. Adding a future toggle needs only one schema entry plus its flag — no per-toggle surgery in `renderPresetToml`/`normalizePreset`/`addPreset`/`applyPreset`. `preset use`/`run` is now authoritative for the keys a preset stores.
+- Added optional, content-hashed persistence for inline images, replacing historical pixels with reusable path references while keeping active image-turn pixels inline. Caches require a stable session identifier and expire after 30 unused days by default.
 - Removed the multi-second cold `find_skill` stall by serving an immediate filesystem index while the exact Codex app-server inventory refreshes asynchronously.
 - Replaced blocking app-server skill discovery during startup with one nonblocking interactive process.
 - Removed duplicate function definitions before forwarding requests, with turn-local `additional_tools` definitions taking precedence over stale top-level schemas.

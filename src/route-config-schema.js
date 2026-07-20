@@ -20,6 +20,8 @@ const ROUTE_KEY_DEFS = [
   { key: 'text_model', type: 'string', default: '' },
   { key: 'image_model', type: 'string', default: '' },
   { key: 'auto_route_image', type: 'bool', default: false },
+  { key: 'persist_inline_images', type: 'bool', default: false },
+  { key: 'inline_image_retention_days', type: 'number', default: 30 },
   { key: 'dedupe_large_input', type: 'bool', default: false },
   { key: 'duplicate_input_min_chars', type: 'number', default: 512 },
   { key: 'verbose_tools', type: 'bool', default: false },

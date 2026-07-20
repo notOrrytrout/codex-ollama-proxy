@@ -39,6 +39,7 @@ function usage() {
   codex-ollama-proxy switch openai
   codex-ollama-proxy switch ollama [--model MODEL] [--no-start]
   codex-ollama-proxy route --text-model MODEL --image-model MODEL [--auto-image|--no-auto-image]
+                           [--persist-images|--no-persist-images] [--image-retention-days DAYS]
   codex-ollama-proxy upstream [--url URL] [--api-key KEY] [--status]
   codex-ollama-proxy logs [--tail N]
   codex-ollama-proxy install
@@ -101,7 +102,7 @@ function parseFlags(argv) {
     const eq = arg.indexOf('=');
     const key = (eq >= 0 ? arg.slice(2, eq) : arg.slice(2)).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
     if (eq >= 0) flags[key] = arg.slice(eq + 1);
-    else if (['force', 'auto-image', 'no-auto-image', 'dedupe-large-input', 'no-dedupe-large-input', 'verbose-tools', 'no-verbose-tools', 'log-upstream-body', 'no-log-upstream-body', 'enable-find-skill', 'no-enable-find-skill', 'stream-loop', 'no-stream-loop', 'imagine-enable', 'imagine-disable', 'imagine-enhance', 'imagine-no-enhance', 'enable', 'disable', 'enhance', 'no-enhance', 'doctor', 'status', 'no-refresh', 'no-backup', 'no-start', 'replace', 'no-replace', 'foreground'].includes(arg.slice(2))) flags[key] = true;
+    else if (['force', 'auto-image', 'no-auto-image', 'persist-images', 'no-persist-images', 'dedupe-large-input', 'no-dedupe-large-input', 'verbose-tools', 'no-verbose-tools', 'log-upstream-body', 'no-log-upstream-body', 'enable-find-skill', 'no-enable-find-skill', 'stream-loop', 'no-stream-loop', 'imagine-enable', 'imagine-disable', 'imagine-enhance', 'imagine-no-enhance', 'enable', 'disable', 'enhance', 'no-enhance', 'doctor', 'status', 'no-refresh', 'no-backup', 'no-start', 'replace', 'no-replace', 'foreground'].includes(arg.slice(2))) flags[key] = true;
     else flags[key] = argv[++i];
   }
   return { flags, rest };
@@ -243,6 +244,15 @@ function route(flags) {
   if (flags.imageModel) text = writeRouteValue(text, 'image_model', flags.imageModel);
   if (flags.autoImage) text = writeRouteValue(text, 'auto_route_image', true);
   if (flags.noAutoImage) text = writeRouteValue(text, 'auto_route_image', false);
+  if (flags.persistImages) text = writeRouteValue(text, 'persist_inline_images', true);
+  if (flags.noPersistImages) text = writeRouteValue(text, 'persist_inline_images', false);
+  if (flags.imageRetentionDays !== undefined) {
+    const retentionDays = Number(flags.imageRetentionDays);
+    if (!Number.isInteger(retentionDays) || retentionDays < 0) {
+      die('Error: --image-retention-days must be a non-negative integer.');
+    }
+    text = writeRouteValue(text, 'inline_image_retention_days', retentionDays);
+  }
   text = applyImagineConfigToText(text);
   fs.writeFileSync(ROUTE_CONFIG, text, 'utf8');
   console.log(`updated=${ROUTE_CONFIG}`);

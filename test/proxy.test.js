@@ -583,6 +583,235 @@ test('disabled image auto-routing preserves the selected model', () => {
   assert.equal(model, 'manually-selected-model');
 });
 
+test('inline image persistence deduplicates historical images and sends text turns path references', () => {
+  withRouteConfig([
+    'text_model = "text-model"',
+    'image_model = "vision-model"',
+    'auto_route_image = true',
+    'persist_inline_images = true',
+  ], ({ translateRequestBody }) => {
+    const imageUrl = 'data:image/png;base64,' + Buffer.from('cached-image').toString('base64');
+    const makeBody = () => ({
+      model: 'vision-model',
+      prompt_cache_key: 'thread-deduplication-test',
+      input: [
+        {
+          type: 'message',
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'Describe this image.' },
+            { type: 'input_image', image_url: imageUrl },
+          ],
+        },
+        {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'Now answer a text-only question.' }],
+        },
+      ],
+      tools: [],
+    });
+
+    const first = makeBody();
+    translateRequestBody(first);
+    assert.equal(first.model, 'text-model');
+    assert.equal(first.input[0].content[1].type, 'input_text');
+    const firstPath = first.input[0].content[1].text.match(/^\[image saved: (.+)]$/)[1];
+    assert.deepEqual(fs.readFileSync(firstPath), Buffer.from('cached-image'));
+
+    translateRequestBody(first);
+    assert.equal(first.input[0].content[1].text, '[image saved: ' + firstPath + ']');
+
+    const replay = makeBody();
+    translateRequestBody(replay);
+    const replayPath = replay.input[0].content[1].text.match(/^\[image saved: (.+)]$/)[1];
+    assert.equal(replayPath, firstPath);
+    assert.equal(fs.readdirSync(path.dirname(firstPath)).length, 1);
+  });
+});
+
+test('inline image persistence keeps active image-turn pixels and dereferences history', () => {
+  withRouteConfig([
+    'text_model = "text-model"',
+    'image_model = "vision-model"',
+    'auto_route_image = true',
+    'persist_inline_images = true',
+  ], ({ translateRequestBody }) => {
+    const historicalUrl = 'data:image/png;base64,' + Buffer.from('historical-image').toString('base64');
+    const activeUrl = 'data:image/jpeg;base64,' + Buffer.from('active-image').toString('base64');
+    const body = {
+      model: 'text-model',
+      prompt_cache_key: 'thread-active-image-test',
+      input: [
+        {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_image', image_url: historicalUrl }],
+        },
+        {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_image', image_url: { url: activeUrl } }],
+        },
+      ],
+      tools: [],
+    };
+
+    translateRequestBody(body);
+    assert.equal(body.model, 'vision-model');
+    assert.equal(body.input[0].content[0].type, 'input_text');
+    assert.equal(body.input[1].content[0].image_url.url, activeUrl);
+
+    const historicalPath = body.input[0].content[0].text.match(/^\[image saved: (.+)]$/)[1];
+    const cachedFiles = fs.readdirSync(path.dirname(historicalPath));
+    assert.equal(cachedFiles.length, 2);
+    assert.ok(cachedFiles.some((name) => name.endsWith('.png')));
+    assert.ok(cachedFiles.some((name) => name.endsWith('.jpg')));
+  });
+});
+
+test('inline image persistence dereferences history on a manually selected vision-model text turn', () => {
+  withRouteConfig([
+    'text_model = "text-model"',
+    'image_model = "vision-model"',
+    'auto_route_image = false',
+    'persist_inline_images = true',
+  ], ({ translateRequestBody }) => {
+    const imageUrl = 'data:image/png;base64,' + Buffer.from('historical-image').toString('base64');
+    const body = {
+      model: 'vision-model',
+      prompt_cache_key: 'manual-vision-text-turn',
+      input: [
+        {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_image', image_url: imageUrl }],
+        },
+        {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'Text-only follow-up.' }],
+        },
+      ],
+      tools: [],
+    };
+
+    translateRequestBody(body);
+
+    assert.equal(body.model, 'vision-model');
+    assert.equal(body.input[0].content[0].type, 'input_text');
+    assert.match(body.input[0].content[0].text, /^\[image saved: .+]$/);
+  });
+});
+
+test('inline image persistence requires a stable session identifier', () => {
+  const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-inline-cache-test-'));
+  const imageUrl = 'data:image/png;base64,' + Buffer.from('unscoped-image').toString('base64');
+  const body = {
+    input: [{
+      type: 'message',
+      role: 'user',
+      content: [{ type: 'input_image', image_url: imageUrl }],
+    }],
+  };
+
+  try {
+    const { rewriteInlineImages } = require('../src/inline-image-cache');
+    rewriteInlineImages(body, { cacheRoot, imageModelTurn: false, retentionDays: 30 });
+    assert.equal(body.input[0].content[0].image_url, imageUrl);
+    assert.deepEqual(fs.readdirSync(cacheRoot), []);
+  } finally {
+    fs.rmSync(cacheRoot, { recursive: true, force: true });
+  }
+});
+
+test('inline image persistence isolates identical content by stable session identifier', () => {
+  const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-inline-cache-test-'));
+  const imageUrl = 'data:image/png;base64,' + Buffer.from('shared-image').toString('base64');
+  const makeBody = (promptCacheKey) => ({
+    prompt_cache_key: promptCacheKey,
+    input: [{
+      type: 'message',
+      role: 'user',
+      content: [{ type: 'input_image', image_url: imageUrl }],
+    }],
+  });
+
+  try {
+    const { rewriteInlineImages } = require('../src/inline-image-cache');
+    const first = makeBody('thread-one');
+    const second = makeBody('thread-two');
+    rewriteInlineImages(first, { cacheRoot, imageModelTurn: false, retentionDays: 30 });
+    rewriteInlineImages(second, { cacheRoot, imageModelTurn: false, retentionDays: 30 });
+    const firstPath = first.input[0].content[0].text.match(/^\[image saved: (.+)]$/)[1];
+    const secondPath = second.input[0].content[0].text.match(/^\[image saved: (.+)]$/)[1];
+    assert.notEqual(path.dirname(firstPath), path.dirname(secondPath));
+    assert.deepEqual(fs.readFileSync(firstPath), Buffer.from('shared-image'));
+    assert.deepEqual(fs.readFileSync(secondPath), Buffer.from('shared-image'));
+  } finally {
+    fs.rmSync(cacheRoot, { recursive: true, force: true });
+  }
+});
+
+test('inline image persistence removes expired inactive session caches', () => {
+  const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-inline-cache-test-'));
+  const expiredDir = path.join(cacheRoot, 'expired-session');
+  const now = Date.UTC(2026, 6, 20);
+  const expiredAt = new Date(now - 31 * 24 * 60 * 60 * 1000);
+  fs.mkdirSync(expiredDir);
+  fs.writeFileSync(path.join(expiredDir, 'old.png'), 'old-image');
+  fs.utimesSync(expiredDir, expiredAt, expiredAt);
+  const body = {
+    prompt_cache_key: 'active-thread',
+    input: [{
+      type: 'message',
+      role: 'user',
+      content: [{
+        type: 'input_image',
+        image_url: 'data:image/png;base64,' + Buffer.from('current-image').toString('base64'),
+      }],
+    }],
+  };
+
+  try {
+    const { rewriteInlineImages } = require('../src/inline-image-cache');
+    rewriteInlineImages(body, {
+      cacheRoot,
+      imageModelTurn: false,
+      retentionDays: 30,
+      cleanupIntervalMs: 0,
+      now,
+    });
+    assert.equal(fs.existsSync(expiredDir), false);
+    assert.match(body.input[0].content[0].text, /^\[image saved: .+]$/);
+  } finally {
+    fs.rmSync(cacheRoot, { recursive: true, force: true });
+  }
+});
+
+test('inline images remain unchanged when persistence is disabled', () => {
+  const imageUrl = 'data:image/png;base64,' + Buffer.from('not-cached').toString('base64');
+  const body = {
+    model: 'vision-model',
+    input: [
+      {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_image', image_url: imageUrl }],
+      },
+      {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: 'Text follow-up.' }],
+      },
+    ],
+    tools: [],
+  };
+
+  assert.equal(routeModel(body), 'text-model');
+  assert.equal(body.input[0].content[0].image_url, imageUrl);
+});
+
 test('proxy forwards responses requests to configured upstream URL with bearer auth', async () => {
   const received = [];
   const upstream = http.createServer((req, res) => {

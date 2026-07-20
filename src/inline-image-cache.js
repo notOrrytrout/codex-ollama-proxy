@@ -1,0 +1,172 @@
+'use strict';
+
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+
+const MIME_EXTENSIONS = new Map([
+  ['image/gif', '.gif'],
+  ['image/jpeg', '.jpg'],
+  ['image/png', '.png'],
+  ['image/webp', '.webp'],
+]);
+const DEFAULT_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+
+let lastCleanupAt = 0;
+
+function hash(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function parseInlineImage(block) {
+  if (!block || typeof block !== 'object') return null;
+  const imageUrl = typeof block.image_url === 'string'
+    ? block.image_url
+    : block.image_url && typeof block.image_url.url === 'string'
+      ? block.image_url.url
+      : null;
+  if (!imageUrl) return null;
+  const match = imageUrl.match(/^data:(image\/(?:gif|jpeg|png|webp));base64,([A-Za-z0-9+/=\s]+)$/i);
+  if (!match) return null;
+  const encoded = match[2].replace(/\s/g, '');
+  if (!encoded) return null;
+  const bytes = Buffer.from(encoded, 'base64');
+  const normalized = encoded.replace(/=+$/, '');
+  if (!bytes.length || bytes.toString('base64').replace(/=+$/, '') !== normalized) return null;
+  return {
+    bytes,
+    mimeType: match[1].toLowerCase(),
+  };
+}
+
+function activeTurnStartIndex(body) {
+  if (!body || !Array.isArray(body.input)) return 0;
+  for (let i = body.input.length - 1; i >= 0; i -= 1) {
+    const item = body.input[i];
+    if (item && item.type === 'message' && item.role === 'user') return i;
+  }
+  return 0;
+}
+
+function stableSessionSeed(body) {
+  const metadata = body && body.metadata && typeof body.metadata === 'object' ? body.metadata : {};
+  const conversation = body && body.conversation;
+  const candidates = [
+    ['session_id', metadata.session_id],
+    ['thread_id', metadata.thread_id],
+    ['conversation_id', metadata.conversation_id],
+    ['prompt_cache_key', body && body.prompt_cache_key],
+    ['conversation', conversation && typeof conversation === 'object' ? conversation.id : conversation],
+  ];
+  for (const [kind, value] of candidates) {
+    if (typeof value === 'string' && value.trim()) return kind + ':' + value;
+  }
+  return null;
+}
+
+function cleanupExpiredSessions(cacheRoot, options = {}) {
+  const retentionDays = Number(options.retentionDays);
+  if (!Number.isFinite(retentionDays) || retentionDays <= 0) return;
+  const now = Number.isFinite(options.now) ? options.now : Date.now();
+  const intervalMs = Number.isFinite(options.cleanupIntervalMs)
+    ? Math.max(0, options.cleanupIntervalMs)
+    : DEFAULT_CLEANUP_INTERVAL_MS;
+  if (intervalMs > 0 && now - lastCleanupAt < intervalMs) return;
+  lastCleanupAt = now;
+
+  let entries;
+  try {
+    entries = fs.readdirSync(cacheRoot, { withFileTypes: true });
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return;
+    throw error;
+  }
+  const expiresBefore = now - retentionDays * 24 * 60 * 60 * 1000;
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const sessionDir = path.join(cacheRoot, entry.name);
+    try {
+      if (fs.statSync(sessionDir).mtimeMs < expiresBefore) {
+        fs.rmSync(sessionDir, { recursive: true, force: true });
+      }
+    } catch (error) {
+      if (!error || error.code !== 'ENOENT') throw error;
+    }
+  }
+}
+
+function touchSession(cacheRoot, sessionKey, now) {
+  const sessionDir = path.join(cacheRoot, sessionKey);
+  fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
+  const touchedAt = new Date(Number.isFinite(now) ? now : Date.now());
+  fs.utimesSync(sessionDir, touchedAt, touchedAt);
+  return sessionDir;
+}
+
+function persistImage(sessionDir, image) {
+  const imageHash = hash(image.bytes);
+  const imagePath = path.join(sessionDir, imageHash + MIME_EXTENSIONS.get(image.mimeType));
+  try {
+    fs.writeFileSync(imagePath, image.bytes, { flag: 'wx', mode: 0o600 });
+  } catch (error) {
+    if (!error || error.code !== 'EEXIST') throw error;
+  }
+  return imagePath;
+}
+
+function pathReference(block, imagePath) {
+  return {
+    type: block.type === 'output_image' ? 'output_text' : 'input_text',
+    text: '[image saved: ' + imagePath + ']',
+  };
+}
+
+function rewriteInlineImages(body, options = {}) {
+  if (!body || !Array.isArray(body.input) || !options.cacheRoot) return body;
+  const sessionSeed = stableSessionSeed(body);
+  if (!sessionSeed) {
+    if (typeof options.log === 'function') {
+      options.log('inline-image-cache: stable session identifier unavailable; leaving images inline');
+    }
+    return body;
+  }
+  const activeStart = activeTurnStartIndex(body);
+  const sessionKey = hash(sessionSeed).slice(0, 24);
+  let sessionDir;
+  try {
+    cleanupExpiredSessions(options.cacheRoot, options);
+    sessionDir = touchSession(options.cacheRoot, sessionKey, options.now);
+  } catch (error) {
+    if (typeof options.log === 'function') options.log('inline-image-cache: ' + error.message);
+    return body;
+  }
+
+  body.input.forEach((item, itemIndex) => {
+    if (!item || typeof item !== 'object') return;
+    for (const field of ['content', 'output']) {
+      if (!Array.isArray(item[field])) continue;
+      item[field] = item[field].map((block) => {
+        const image = parseInlineImage(block);
+        if (!image) return block;
+        let imagePath;
+        try {
+          imagePath = persistImage(sessionDir, image);
+        } catch (error) {
+          if (typeof options.log === 'function') options.log('inline-image-cache: ' + error.message);
+          return block;
+        }
+        const isActiveImage = itemIndex >= activeStart;
+        return options.imageModelTurn && isActiveImage ? block : pathReference(block, imagePath);
+      });
+    }
+  });
+  return body;
+}
+
+module.exports = {
+  activeTurnStartIndex,
+  cleanupExpiredSessions,
+  parseInlineImage,
+  rewriteInlineImages,
+  stableSessionSeed,
+};

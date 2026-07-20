@@ -6,6 +6,7 @@ const path = require('path');
 const webSearch = require('./web-search');
 const skillFind = require('./skill-find');
 const imagine = require('./imagine');
+const inlineImageCache = require('./inline-image-cache');
 const markers = require('./ui-markers');
 const upstreamLib = require('./upstream');
 
@@ -15,6 +16,7 @@ const CODEX_DIR = process.env.CODEX_HOME || path.join(process.env.HOME, '.codex'
 const RUNTIME_DIR = path.join(CODEX_DIR, 'ollama-shape-proxy');
 const PROXY_MODELS_PATH = path.join(RUNTIME_DIR, 'proxy-models.toml');
 const UPSTREAM_BODY_LOG = path.join(RUNTIME_DIR, 'upstream-bodies.jsonl');
+const INLINE_IMAGE_CACHE_DIR = path.join(CODEX_DIR, 'attachments');
 // dedupe_large_input defaults to false: stripping repeated developer context
 // mid-turn can break provider implicit caching. Opt in via proxy-models.toml
 // (dedupe_large_input = true) or the CLI flag --dedupe-large-input / env
@@ -49,7 +51,7 @@ function loadRouteConfig() {
     const minChars = parseInt(process.env.PROXY_DEDUPE_MIN_CHARS, 10);
     if (Number.isFinite(minChars) && minChars >= 0) ROUTE_CFG.duplicate_input_min_chars = minChars;
   }
-  log('route config: text=' + ROUTE_CFG.text_model + ' image=' + ROUTE_CFG.image_model + ' auto_route_image=' + ROUTE_CFG.auto_route_image + ' dedupe_large_input=' + ROUTE_CFG.dedupe_large_input + ' duplicate_input_min_chars=' + ROUTE_CFG.duplicate_input_min_chars + ' verbose_tools=' + ROUTE_CFG.verbose_tools + ' log_upstream_body=' + ROUTE_CFG.log_upstream_body + ' find_skill=' + ROUTE_CFG.enable_find_skill + ' stream_loop=' + ROUTE_CFG.stream_proxy_loop + ' upstream=' + upstreamLib.displayUrl(getUpstream()) + ' imagine=' + ROUTE_CFG.imagine_enabled + ' imagine_service=' + ROUTE_CFG.imagine_service);
+  log('route config: text=' + ROUTE_CFG.text_model + ' image=' + ROUTE_CFG.image_model + ' auto_route_image=' + ROUTE_CFG.auto_route_image + ' persist_inline_images=' + ROUTE_CFG.persist_inline_images + ' inline_image_retention_days=' + ROUTE_CFG.inline_image_retention_days + ' dedupe_large_input=' + ROUTE_CFG.dedupe_large_input + ' duplicate_input_min_chars=' + ROUTE_CFG.duplicate_input_min_chars + ' verbose_tools=' + ROUTE_CFG.verbose_tools + ' log_upstream_body=' + ROUTE_CFG.log_upstream_body + ' find_skill=' + ROUTE_CFG.enable_find_skill + ' stream_loop=' + ROUTE_CFG.stream_proxy_loop + ' upstream=' + upstreamLib.displayUrl(getUpstream()) + ' imagine=' + ROUTE_CFG.imagine_enabled + ' imagine_service=' + ROUTE_CFG.imagine_service);
 }
 
 function getUpstream() {
@@ -500,14 +502,7 @@ function contentHasImage(content) {
 // and inspected in full so a current tool-produced screenshot still routes.
 function activeTurnHasImage(body) {
   if (!body || !Array.isArray(body.input)) return false;
-  let activeTurnStart = 0;
-  for (let i = body.input.length - 1; i >= 0; i -= 1) {
-    const item = body.input[i];
-    if (item && item.type === 'message' && item.role === 'user') {
-      activeTurnStart = i;
-      break;
-    }
-  }
+  const activeTurnStart = inlineImageCache.activeTurnStartIndex(body);
   for (const item of body.input.slice(activeTurnStart)) {
     if (!item || typeof item !== 'object') continue;
     if (contentHasImage(item.content) || contentHasImage(item.output)) return true;
@@ -545,7 +540,19 @@ function translateRequestBody(body) {
   // Learn namespace/tool splits from the request tools (upfront tools) and
   // from tool_search_output items (deferred tools surfaced by tool_search).
   if (Array.isArray(body.tools)) ingestNamespaces(body.tools);
+  const activeImageTurn = activeTurnHasImage(body);
   applyModelRouting(body);
+  if (ROUTE_CFG.persist_inline_images) {
+    inlineImageCache.rewriteInlineImages(body, {
+      cacheRoot: INLINE_IMAGE_CACHE_DIR,
+      // Pixel retention follows the active-turn decision, not the selected
+      // model name. A manually selected vision model on a text-only turn must
+      // not cause every historical inline image to be replayed.
+      imageModelTurn: activeImageTurn,
+      retentionDays: ROUTE_CFG.inline_image_retention_days,
+      log: debugLog,
+    });
+  }
   let inputChanged = false;
   const deferredTools = [];
   if (Array.isArray(body.input)) {

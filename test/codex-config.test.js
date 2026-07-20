@@ -89,6 +89,38 @@ test('CLI switch ollama resets chat-completion upstream config to local Ollama r
   }
 });
 
+test('CLI route configures inline image persistence and retention', () => {
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-cli-inline-images-'));
+  const runtimeDir = path.join(codexHome, 'ollama-shape-proxy');
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.writeFileSync(path.join(runtimeDir, 'proxy-models.toml'), [
+    'persist_inline_images = false',
+    'inline_image_retention_days = 30',
+    '',
+  ].join('\n'), 'utf8');
+
+  try {
+    const result = spawnSync(process.execPath, [
+      path.join(__dirname, '..', 'bin', 'codex-ollama-proxy'),
+      'route',
+      '--persist-images',
+      '--image-retention-days',
+      '14',
+    ], {
+      cwd: path.join(__dirname, '..'),
+      env: Object.assign({}, process.env, { CODEX_HOME: codexHome }),
+      encoding: 'utf8',
+    });
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const route = fs.readFileSync(path.join(runtimeDir, 'proxy-models.toml'), 'utf8');
+    assert.match(route, /^persist_inline_images\s*=\s*true$/m);
+    assert.match(route, /^inline_image_retention_days\s*=\s*14$/m);
+  } finally {
+    fs.rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
 test('CLI preset add stores provider config without API key and preset use applies route', () => {
   const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-cli-preset-'));
   const runtimeDir = path.join(codexHome, 'ollama-shape-proxy');
