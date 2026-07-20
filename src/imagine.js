@@ -782,6 +782,8 @@ function fulfillProxyStatus(call, config, log) {
       text_model: config.text_model || null,
       image_model: config.image_model || null,
       auto_route_image: config.auto_route_image || false,
+      dedupe_large_input: config.dedupe_large_input !== false,
+      duplicate_input_min_chars: config.duplicate_input_min_chars || 512,
       verbose_tools: config.verbose_tools || false,
       log_upstream_body: config.log_upstream_body || false,
       enable_find_skill: config.enable_find_skill || false,

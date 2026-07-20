@@ -15,7 +15,7 @@ const CODEX_DIR = process.env.CODEX_HOME || path.join(process.env.HOME, '.codex'
 const RUNTIME_DIR = path.join(CODEX_DIR, 'ollama-shape-proxy');
 const PROXY_MODELS_PATH = path.join(RUNTIME_DIR, 'proxy-models.toml');
 const UPSTREAM_BODY_LOG = path.join(RUNTIME_DIR, 'upstream-bodies.jsonl');
-const ROUTE_CFG = { text_model: null, image_model: null, auto_route_image: false, verbose_tools: false, log_upstream_body: false, enable_find_skill: false, stream_proxy_loop: true, upstream_url: upstreamLib.DEFAULT_UPSTREAM_URL, upstream_api_key: "", imagine_enabled: false, imagine_service: "gemini", imagine_model: "", imagine_base_url: "", imagine_api_key: "", imagine_quality: "fast", imagine_enhance: false, imagine_aspect_ratio: "1:1" };
+const ROUTE_CFG = { text_model: null, image_model: null, auto_route_image: false, dedupe_large_input: true, duplicate_input_min_chars: 512, verbose_tools: false, log_upstream_body: false, enable_find_skill: false, stream_proxy_loop: true, upstream_url: upstreamLib.DEFAULT_UPSTREAM_URL, upstream_api_key: "", imagine_enabled: false, imagine_service: "gemini", imagine_model: "", imagine_base_url: "", imagine_api_key: "", imagine_quality: "fast", imagine_enhance: false, imagine_aspect_ratio: "1:1" };
 function loadRouteConfig() {
   try {
     const raw = fs.readFileSync(PROXY_MODELS_PATH, 'utf8');
@@ -24,6 +24,8 @@ function loadRouteConfig() {
       if (m && m[1] in ROUTE_CFG) ROUTE_CFG[m[1]] = m[2];
       const b = line.match(/^\s*([A-Za-z_]+)\s*=\s*(true|false)\b/);
       if (b && b[1] in ROUTE_CFG) ROUTE_CFG[b[1]] = b[2] === 'true';
+      const n = line.match(/^\s*([A-Za-z_]+)\s*=\s*(\d+)\b/);
+      if (n && n[1] in ROUTE_CFG && typeof ROUTE_CFG[n[1]] === 'number') ROUTE_CFG[n[1]] = Number(n[2]);
     }
   } catch (e) {
     // Missing file is fine; auto-routing just stays off.
@@ -32,7 +34,7 @@ function loadRouteConfig() {
   if (process.env.PROXY_FIND_SKILL === '0') ROUTE_CFG.enable_find_skill = false;
   if (process.env.PROXY_STREAM_LOOP === '1') ROUTE_CFG.stream_proxy_loop = true;
   if (process.env.PROXY_STREAM_LOOP === '0') ROUTE_CFG.stream_proxy_loop = false;
-  log('route config: text=' + ROUTE_CFG.text_model + ' image=' + ROUTE_CFG.image_model + ' auto_route_image=' + ROUTE_CFG.auto_route_image + ' verbose_tools=' + ROUTE_CFG.verbose_tools + ' log_upstream_body=' + ROUTE_CFG.log_upstream_body + ' find_skill=' + ROUTE_CFG.enable_find_skill + ' stream_loop=' + ROUTE_CFG.stream_proxy_loop + ' upstream=' + upstreamLib.displayUrl(getUpstream()) + ' imagine=' + ROUTE_CFG.imagine_enabled + ' imagine_service=' + ROUTE_CFG.imagine_service);
+  log('route config: text=' + ROUTE_CFG.text_model + ' image=' + ROUTE_CFG.image_model + ' auto_route_image=' + ROUTE_CFG.auto_route_image + ' dedupe_large_input=' + ROUTE_CFG.dedupe_large_input + ' duplicate_input_min_chars=' + ROUTE_CFG.duplicate_input_min_chars + ' verbose_tools=' + ROUTE_CFG.verbose_tools + ' log_upstream_body=' + ROUTE_CFG.log_upstream_body + ' find_skill=' + ROUTE_CFG.enable_find_skill + ' stream_loop=' + ROUTE_CFG.stream_proxy_loop + ' upstream=' + upstreamLib.displayUrl(getUpstream()) + ' imagine=' + ROUTE_CFG.imagine_enabled + ' imagine_service=' + ROUTE_CFG.imagine_service);
 }
 
 function getUpstream() {
@@ -217,6 +219,52 @@ function dedupeFunctionTools(tools) {
   }
   deduped.reverse();
   return deduped;
+}
+
+// Codex can replay the same large developer instruction blocks several times
+// in one Responses request. Message IDs differ, so dedupe at the content-block
+// level. Walk backward to preserve the newest copy and limit the filter to
+// developer input_text blocks: repeated user/assistant text can be intentional.
+function dedupeLargeInputBlocks(body, minChars = 512) {
+  if (!body || !Array.isArray(body.input)) return { blocks: 0, chars: 0 };
+  const threshold = Number.isFinite(minChars) && minChars >= 0 ? minChars : 512;
+  const seen = new Set();
+  let removedBlocks = 0;
+  let removedChars = 0;
+  const keptItems = [];
+
+  for (let itemIndex = body.input.length - 1; itemIndex >= 0; itemIndex -= 1) {
+    const item = body.input[itemIndex];
+    if (!item || item.type !== 'message' || item.role !== 'developer' || !Array.isArray(item.content)) {
+      keptItems.push(item);
+      continue;
+    }
+
+    const keptContent = [];
+    for (let contentIndex = item.content.length - 1; contentIndex >= 0; contentIndex -= 1) {
+      const block = item.content[contentIndex];
+      const text = block && block.type === 'input_text' && typeof block.text === 'string'
+        ? block.text : null;
+      if (text !== null && text.length >= threshold && seen.has(text)) {
+        removedBlocks += 1;
+        removedChars += text.length;
+        continue;
+      }
+      if (text !== null && text.length >= threshold) seen.add(text);
+      keptContent.push(block);
+    }
+    keptContent.reverse();
+
+    if (keptContent.length > 0) {
+      keptItems.push(Object.assign({}, item, { content: keptContent }));
+    }
+  }
+
+  if (removedBlocks > 0) {
+    keptItems.reverse();
+    body.input = keptItems;
+  }
+  return { blocks: removedBlocks, chars: removedChars };
 }
 
 function log(...args) {
@@ -472,6 +520,12 @@ function applyModelRouting(body) {
 
 function translateRequestBody(body) {
   if (!body || typeof body !== 'object') return body;
+  if (ROUTE_CFG.dedupe_large_input) {
+    const removed = dedupeLargeInputBlocks(body, ROUTE_CFG.duplicate_input_min_chars);
+    if (removed.blocks > 0) {
+      debugLog('removed ' + removed.blocks + ' duplicate large input block(s), ' + removed.chars + ' characters');
+    }
+  }
   liftAdditionalToolsInput(body);
   // Learn namespace/tool splits from the request tools (upfront tools) and
   // from tool_search_output items (deferred tools surfaced by tool_search).
@@ -1643,6 +1697,7 @@ if (require.main === module || process.env.CODEX_OLLAMA_PROXY_AUTOSTART === '1')
 }
 
 module.exports = {
+  dedupeLargeInputBlocks,
   translateInputItem,
   translateRequestBody,
   getUpstream,

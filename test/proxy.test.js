@@ -167,6 +167,49 @@ function textItem(id, text, attachments = []) {
   };
 }
 
+test('dedupeLargeInputBlocks keeps the newest large developer block', () => {
+  const { dedupeLargeInputBlocks } = require('../src/proxy');
+  const repeated = '<skills_instructions>' + 'x'.repeat(600) + '</skills_instructions>';
+  const body = {
+    input: [
+      { type: 'message', id: 'old', role: 'developer', content: [
+        { type: 'input_text', text: repeated },
+        { type: 'input_text', text: 'old unique' },
+      ] },
+      { type: 'message', id: 'user', role: 'user', content: [
+        { type: 'input_text', text: repeated },
+      ] },
+      { type: 'message', id: 'new', role: 'developer', content: [
+        { type: 'input_text', text: repeated },
+        { type: 'input_text', text: 'new unique' },
+      ] },
+    ],
+  };
+
+  const removed = dedupeLargeInputBlocks(body, 512);
+
+  assert.deepEqual(removed, { blocks: 1, chars: repeated.length });
+  assert.deepEqual(body.input.map((item) => item.id), ['old', 'user', 'new']);
+  assert.deepEqual(body.input[0].content.map((block) => block.text), ['old unique']);
+  assert.equal(body.input[1].content[0].text, repeated);
+  assert.deepEqual(body.input[2].content.map((block) => block.text), [repeated, 'new unique']);
+});
+
+test('dedupeLargeInputBlocks preserves short, distinct, and non-developer text', () => {
+  const { dedupeLargeInputBlocks } = require('../src/proxy');
+  const short = 'same short text';
+  const long = 'y'.repeat(700);
+  const body = { input: [
+    { type: 'message', role: 'developer', content: [{ type: 'input_text', text: short }] },
+    { type: 'message', role: 'developer', content: [{ type: 'input_text', text: short }] },
+    { type: 'message', role: 'assistant', content: [{ type: 'input_text', text: long }] },
+    { type: 'message', role: 'assistant', content: [{ type: 'input_text', text: long }] },
+  ] };
+
+  assert.deepEqual(dedupeLargeInputBlocks(body, 512), { blocks: 0, chars: 0 });
+  assert.equal(body.input.length, 4);
+});
+
 function writeTextTurn(res, options = {}) {
   const id = options.id || 'resp_text';
   const text = options.text || 'done';
