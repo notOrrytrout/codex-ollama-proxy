@@ -45,6 +45,31 @@ function postJson(port, path, body) {
   });
 }
 
+function postJsonText(port, path, body) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify(body);
+    const req = http.request({
+      host: '127.0.0.1',
+      port,
+      path,
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(payload),
+      },
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => resolve({
+        statusCode: res.statusCode,
+        body: Buffer.concat(chunks).toString('utf8'),
+      }));
+    });
+    req.on('error', reject);
+    req.end(payload);
+  });
+}
+
 async function freePort() {
   const server = http.createServer();
   const port = await listen(server);
@@ -149,6 +174,52 @@ test('completion API adaptor translates Responses requests to Chat Completions',
     assert.equal(received[0].body.model, 'test-model');
     assert.deepEqual(received[0].body.messages, [{ role: 'user', content: 'say hello' }]);
     assert.equal(received[0].body.tools[0].function.name, 'lookup');
+  } finally {
+    await close(adaptorServer);
+    await close(chatServer);
+  }
+});
+
+test('completion API adaptor streams upstream errors without crashing', async () => {
+  const chatServer = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/models') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ object: 'list', data: [{ id: 'test-model', object: 'model' }] }));
+      return;
+    }
+    res.writeHead(429, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ status: 429, title: 'Too Many Requests' }));
+  });
+  const chatPort = await listen(chatServer);
+
+  const adaptor = require('../adaptor/completion-api-adaptor');
+  const adaptorServer = adaptor.startServer({
+    port: 0,
+    baseUrl: `http://127.0.0.1:${chatPort}/v1`,
+    apiKey: 'test-key',
+    defaultModel: 'test-model',
+  });
+  await new Promise((resolve) => adaptorServer.once('listening', resolve));
+  const adaptorPort = adaptorServer.address().port;
+
+  try {
+    const response = await postJsonText(adaptorPort, '/v1/responses', {
+      input: 'hit rate limit',
+      stream: true,
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.match(response.body, /event: response\.created/);
+    assert.match(response.body, /event: response\.error/);
+    assert.match(response.body, /upstream 429/);
+
+    const health = await new Promise((resolve, reject) => {
+      http.get({ host: '127.0.0.1', port: adaptorPort, path: '/health' }, (res) => {
+        res.resume();
+        resolve(res.statusCode);
+      }).on('error', reject);
+    });
+    assert.equal(health, 200);
   } finally {
     await close(adaptorServer);
     await close(chatServer);

@@ -422,7 +422,10 @@ function startServer(options = {}) {
       }
       if (req.method === 'POST' && (path === '/v1/responses' || path === '/responses')) {
         const body = await parseJsonBody(req);
-        if (body.stream) return streamResponse(res, body, config);
+        if (body.stream) {
+          await streamResponse(res, body, config);
+          return;
+        }
         const upstream = await callChatCompletion(body, config, false);
         const completion = await upstream.json();
         return jsonResponse(res, 200, completionToResponse(completion, body.model || config.defaultModel));
