@@ -138,6 +138,25 @@ async function withProxy(upstreamHandler, run, config = []) {
   }
 }
 
+function withRouteConfig(config, run) {
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-proxy-routing-test-'));
+  const runtimeDir = path.join(codexHome, 'ollama-shape-proxy');
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.writeFileSync(path.join(runtimeDir, 'proxy-models.toml'), [...config, ''].join('\n'));
+
+  const previousCodexHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = codexHome;
+  delete require.cache[require.resolve('../src/proxy')];
+  try {
+    return run(require('../src/proxy'));
+  } finally {
+    delete require.cache[require.resolve('../src/proxy')];
+    if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousCodexHome;
+    fs.rmSync(codexHome, { recursive: true, force: true });
+  }
+}
+
 function textItem(id, text, attachments = []) {
   return {
     type: 'message',
@@ -205,6 +224,17 @@ function writeFunctionTurn(res, item, ending) {
     writeSse(res, null, '[DONE]');
   }
   res.end();
+}
+
+function routeModel(body, autoRouteImage = true) {
+  return withRouteConfig([
+    'text_model = "text-model"',
+    'image_model = "vision-model"',
+    'auto_route_image = ' + autoRouteImage,
+  ], ({ translateRequestBody }) => {
+    translateRequestBody(body);
+    return body.model;
+  });
 }
 
 test('request translation converts replayed image_generation_call items for Ollama', () => {
@@ -322,6 +352,88 @@ test('request translation injects tool_search when Codex omits it', () => {
     body.tools.some((tool) => tool.type === 'function' && tool.name === 'tool_search'),
     'expected tool_search to be injected as a function tool'
   );
+});
+
+test('image auto-routing sends a current user attachment to the vision model', () => {
+  const model = routeModel({
+    model: 'text-model',
+    input: [{
+      type: 'message',
+      role: 'user',
+      content: [
+        { type: 'input_text', text: 'Describe this image.' },
+        { type: 'input_image', image_url: 'data:image/png;base64,AAAA' },
+      ],
+    }],
+    tools: [],
+  });
+
+  assert.equal(model, 'vision-model');
+});
+
+test('image auto-routing sends a current Computer Use screenshot to the vision model', () => {
+  const model = routeModel({
+    model: 'text-model',
+    input: [
+      {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: 'What is visible in the current window?' }],
+      },
+      { type: 'function_call', name: 'ComputerUse', call_id: 'call_computer', arguments: '{}' },
+      {
+        type: 'function_call_output',
+        call_id: 'call_computer',
+        output: [{ type: 'input_image', file_id: 'file_screenshot' }],
+      },
+    ],
+    tools: [],
+  });
+
+  assert.equal(model, 'vision-model');
+});
+
+test('image auto-routing ignores screenshots from earlier user turns', () => {
+  const model = routeModel({
+    model: 'vision-model',
+    input: [
+      {
+        type: 'message',
+        role: 'user',
+        content: [
+          { type: 'input_text', text: 'Describe this screenshot.' },
+          { type: 'input_image', image_url: 'data:image/png;base64,AAAA' },
+        ],
+      },
+      {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: 'It shows the settings window.' }],
+      },
+      {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: 'Now explain the keyboard shortcut.' }],
+      },
+    ],
+    tools: [],
+  });
+
+  assert.equal(model, 'text-model');
+});
+
+test('disabled image auto-routing preserves the selected model', () => {
+  const model = routeModel({
+    model: 'manually-selected-model',
+    input: [{
+      type: 'message',
+      role: 'user',
+      content: [{ type: 'input_image', image_url: 'data:image/png;base64,AAAA' }],
+    }],
+    tools: [],
+  }, false);
+
+  assert.equal(model, 'manually-selected-model');
 });
 
 test('proxy forwards responses requests to configured upstream URL with bearer auth', async () => {
