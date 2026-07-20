@@ -446,6 +446,76 @@ test('CLI run PRESET detaches after proxy starts', async () => {
   }
 });
 
+test('CLI preset use applies preset and starts proxy stack by default', async () => {
+  const provider = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/models') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ object: 'list', data: [{ id: 'use-model', object: 'model' }] }));
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      id: 'chatcmpl_use',
+      object: 'chat.completion',
+      choices: [{ message: { role: 'assistant', content: 'preset use ok' } }],
+    }));
+  });
+  const providerPort = await listen(provider);
+  const proxyPort = await freePort();
+  const adaptorPort = await freePort();
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-completion-preset-use-'));
+  fs.writeFileSync(path.join(codexHome, 'config.toml'), 'sandbox_mode = "danger-full-access"\n', 'utf8');
+
+  try {
+    const add = spawnSync(process.execPath, [
+      path.join(__dirname, '..', 'bin', 'codex-ollama-proxy'),
+      'preset',
+      'add',
+      'fake-provider',
+      '--adaptor',
+      'chat-completion',
+      '--url',
+      `http://127.0.0.1:${providerPort}/v1`,
+      '--text-model',
+      'use-model',
+    ], {
+      cwd: path.join(__dirname, '..'),
+      env: Object.assign({}, process.env, { CODEX_HOME: codexHome }),
+      encoding: 'utf8',
+    });
+    assert.equal(add.status, 0, add.stderr || add.stdout);
+
+    const use = spawnSync(process.execPath, [
+      path.join(__dirname, '..', 'bin', 'codex-ollama-proxy'),
+      'preset',
+      'use',
+      'fake-provider',
+      '--no-refresh',
+      '--no-backup',
+      '--adaptor-port',
+      String(adaptorPort),
+    ], {
+      cwd: path.join(__dirname, '..'),
+      env: Object.assign({}, process.env, {
+        CODEX_HOME: codexHome,
+        PROXY_PORT: String(proxyPort),
+      }),
+      encoding: 'utf8',
+      timeout: 8000,
+    });
+
+    assert.equal(use.status, 0, use.stderr || use.stdout);
+    assert.match(use.stdout, /preset_applied=fake-provider/);
+    assert.match(use.stdout, /started_pid=\d+/);
+    await waitForHttp(proxyPort, '/v1/models');
+  } finally {
+    killListeningPort(proxyPort);
+    killListeningPort(adaptorPort);
+    await close(provider);
+    fs.rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
 test('CLI serve --adaptor chat-completion reports occupied unhealthy proxy port before starting adaptor', async () => {
   const occupied = http.createServer((_req, res) => {
     res.writeHead(200, { 'content-type': 'text/plain' });

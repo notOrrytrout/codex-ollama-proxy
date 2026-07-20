@@ -68,6 +68,7 @@ test('CLI switch ollama resets chat-completion upstream config to local Ollama r
       'ollama',
       '--no-refresh',
       '--no-backup',
+      '--no-start',
     ], {
       cwd: path.join(__dirname, '..'),
       env: Object.assign({}, process.env, { CODEX_HOME: codexHome }),
@@ -132,6 +133,7 @@ test('CLI preset add stores provider config without API key and preset use appli
       'provider-secret',
       '--no-refresh',
       '--no-backup',
+      '--no-start',
     ], {
       cwd: path.join(__dirname, '..'),
       env: Object.assign({}, process.env, { CODEX_HOME: codexHome }),
@@ -189,6 +191,7 @@ test('CLI preset add can store API key when requested', () => {
       'nvidia',
       '--no-refresh',
       '--no-backup',
+      '--no-start',
     ], {
       cwd: path.join(__dirname, '..'),
       env: Object.assign({}, process.env, { CODEX_HOME: codexHome }),
@@ -242,6 +245,7 @@ test('CLI preset add can persist imagine_enabled and preset use applies it', () 
       'nvidia',
       '--no-refresh',
       '--no-backup',
+      '--no-start',
     ], {
       cwd: path.join(__dirname, '..'),
       env: Object.assign({}, process.env, { CODEX_HOME: codexHome }),

@@ -28,11 +28,11 @@ function usage() {
   codex-ollama-proxy preset add NAME --adaptor chat-completion --url URL --text-model MODEL [--image-model MODEL] [--auto-image|--no-auto-image] [--imagine-enable|--imagine-disable]
   codex-ollama-proxy preset list
   codex-ollama-proxy preset show NAME
-  codex-ollama-proxy preset use NAME [--api-key KEY]
+  codex-ollama-proxy preset use NAME [--api-key KEY] [--no-start]
   codex-ollama-proxy run NAME [--api-key KEY] [--adaptor-port PORT] [--replace] [--foreground]
   codex-ollama-proxy status
   codex-ollama-proxy switch openai
-  codex-ollama-proxy switch ollama [--model MODEL]
+  codex-ollama-proxy switch ollama [--model MODEL] [--no-start]
   codex-ollama-proxy route --text-model MODEL --image-model MODEL [--auto-image|--no-auto-image]
   codex-ollama-proxy upstream [--url URL] [--api-key KEY] [--status]
   codex-ollama-proxy logs [--tail N]
@@ -95,7 +95,7 @@ function parseFlags(argv) {
     const eq = arg.indexOf('=');
     const key = (eq >= 0 ? arg.slice(2, eq) : arg.slice(2)).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
     if (eq >= 0) flags[key] = arg.slice(eq + 1);
-    else if (['force', 'auto-image', 'no-auto-image', 'imagine-enable', 'imagine-disable', 'enable', 'disable', 'enhance', 'no-enhance', 'doctor', 'status', 'no-refresh', 'no-backup', 'replace', 'foreground'].includes(arg.slice(2))) flags[key] = true;
+    else if (['force', 'auto-image', 'no-auto-image', 'imagine-enable', 'imagine-disable', 'enable', 'disable', 'enhance', 'no-enhance', 'doctor', 'status', 'no-refresh', 'no-backup', 'no-start', 'replace', 'no-replace', 'foreground'].includes(arg.slice(2))) flags[key] = true;
     else flags[key] = argv[++i];
   }
   return { flags, rest };
@@ -151,6 +151,7 @@ function applyPreset(name, flags = {}) {
     model: preset.text_model,
     noRefresh: flags.noRefresh,
     noBackup: flags.noBackup,
+    noStart: true,
   });
   let text = readRouteConfig();
   text = writeRouteValue(text, 'upstream_url', preset.upstream_url);
@@ -175,7 +176,7 @@ function applyPreset(name, flags = {}) {
   return preset;
 }
 
-function presetCmd(subcommand, argv) {
+async function presetCmd(subcommand, argv) {
   if (!subcommand || subcommand === '-h' || subcommand === '--help') return usage();
   if (subcommand === 'list') return presets.listPresets(RUNTIME_DIR, console.log);
   const [name, ...tail] = argv;
@@ -183,7 +184,11 @@ function presetCmd(subcommand, argv) {
   const { flags } = parseFlags(tail);
   if (subcommand === 'add') return presets.addPreset(RUNTIME_DIR, name, flags, console.log);
   if (subcommand === 'show') return presets.showPreset(RUNTIME_DIR, name, console.log);
-  if (subcommand === 'use') return applyPreset(name, flags);
+  if (subcommand === 'use') {
+    const preset = applyPreset(name, flags);
+    if (flags.noStart) return preset;
+    return startPresetServer(preset, Object.assign({}, flags, { replace: !flags.noReplace }));
+  }
   die('Error: preset command must be add, list, show, or use.');
 }
 
@@ -254,6 +259,12 @@ function switchMode(mode, flags) {
   if (flags.noRefresh) args.push('--no-refresh');
   if (flags.noBackup) args.push('--no-backup');
   codexConfig(args);
+  if (!flags.noStart) {
+    const proxyPort = parseInt(process.env.PROXY_PORT || PROXY_PORT, 10);
+    bootoutLaunchAgent();
+    stopListeningPort(proxyPort);
+    install();
+  }
   console.log('Restart Codex or open a fresh thread so provider discovery reloads.');
 }
 
@@ -470,11 +481,7 @@ async function serveCmd(flags = {}) {
   return proxyServer;
 }
 
-async function runPreset(name, flags = {}) {
-  if (!name) die('Error: run requires a preset name.');
-  const preset = applyPreset(name, flags);
-  if (flags.foreground) return serveCmd(Object.assign({}, flags, { adaptor: preset.adaptor }));
-
+async function startPresetServer(preset, flags = {}) {
   if (!process.env.PROXY_PORT) process.env.PROXY_PORT = PROXY_PORT;
   const proxyPort = parseInt(process.env.PROXY_PORT || PROXY_PORT, 10);
   if (!await ensureProxyCanStart(flags, proxyPort)) return null;
@@ -515,6 +522,14 @@ async function runPreset(name, flags = {}) {
   console.log(`proxy=http://127.0.0.1:${proxyPort} status=${probe.statusCode}`);
   console.log(`logs=${logPath}`);
   return child;
+}
+
+async function runPreset(name, flags = {}) {
+  if (!name) die('Error: run requires a preset name.');
+  const preset = applyPreset(name, flags);
+  const serverFlags = Object.assign({}, flags, { replace: !flags.noReplace });
+  if (flags.foreground) return serveCmd(Object.assign({}, serverFlags, { adaptor: preset.adaptor }));
+  return startPresetServer(preset, serverFlags);
 }
 
 function imagineCmd(flags) {

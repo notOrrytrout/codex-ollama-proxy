@@ -83,7 +83,6 @@ codex-ollama-proxy preset add nvidia \
   --imagine-enable
 
 codex-ollama-proxy preset use nvidia --api-key "$NVIDIA_API_KEY"
-codex-ollama-proxy serve --adaptor chat-completion
 ```
 
 To store the key in the preset as well, pass it when creating the preset:
@@ -101,9 +100,11 @@ codex-ollama-proxy preset add nvidia \
 codex-ollama-proxy run nvidia
 ```
 
-`run` starts the proxy stack in the background, waits briefly for the local
-proxy to respond, prints the PID and log path, and returns the terminal prompt.
-Use `--foreground` when you want live server logs in the current terminal.
+`preset use` and `run` start or restart the preset proxy stack in the
+background, wait briefly for the local proxy to respond, print the PID and log
+path, and return the terminal prompt. Use `run --foreground` when you want live
+server logs in the current terminal. Use `--no-start` with `preset use` only
+when you want to write config without starting the proxy.
 
 NVIDIA example:
 
@@ -148,6 +149,10 @@ codex-ollama-proxy switch ollama --model "MODEL"
 ```
 
 After switching, restart Codex or open a fresh thread.
+
+`switch ollama` starts or restarts the normal launchd-managed proxy
+automatically. Use `--no-start` only when you want to change Codex config
+without touching the running proxy.
 
 ## Fix MCP Unsupported Call Errors In Codex
 

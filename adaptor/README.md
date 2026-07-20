@@ -44,9 +44,9 @@ codex-ollama-proxy preset add nvidia \
 codex-ollama-proxy run nvidia
 ```
 
-`run` starts the proxy and adaptor in the background and returns your terminal.
-Use `codex-ollama-proxy logs --tail 100` to inspect it, or pass
-`--foreground` for live logs.
+`preset use` and `run` start or restart the proxy and adaptor in the background
+and return your terminal. Use `codex-ollama-proxy logs --tail 100` to inspect
+it, or pass `--foreground` to `run` for live logs.
 
 The proxy will start both local servers:
 
