@@ -153,6 +153,10 @@ codex-ollama-proxy route --text-model "TEXT_MODEL" --image-model "IMAGE_MODEL" -
 codex-ollama-proxy switch ollama --model "TEXT_MODEL"
 ```
 
+With automatic image routing enabled, images in the active user turn or its
+tool outputs use the image model. Images from earlier turns are ignored;
+disable automatic routing to preserve manual model selection.
+
 One model for both:
 
 ```bash
