@@ -354,6 +354,52 @@ test('request translation injects tool_search when Codex omits it', () => {
   );
 });
 
+test('request translation removes duplicate function definitions', () => {
+  const { translateRequestBody } = require('../src/proxy');
+  const duplicate = {
+    type: 'function',
+    name: 'duplicate_tool',
+    parameters: { type: 'object', properties: {} },
+  };
+  const body = {
+    model: 'test-model',
+    input: 'use a tool',
+    tools: [duplicate, JSON.parse(JSON.stringify(duplicate))],
+  };
+
+  translateRequestBody(body);
+
+  assert.equal(body.tools.filter((tool) => tool.name === 'duplicate_tool').length, 1);
+});
+
+test('turn-local additional_tools override stale same-name top-level schemas', () => {
+  const { translateRequestBody } = require('../src/proxy');
+  const stale = {
+    type: 'function',
+    name: 'changing_tool',
+    description: 'stale definition',
+    parameters: { type: 'object', properties: { oldArgument: { type: 'string' } } },
+  };
+  const current = {
+    type: 'function',
+    name: 'changing_tool',
+    description: 'current turn definition',
+    parameters: { type: 'object', properties: { currentArgument: { type: 'number' } } },
+  };
+  const body = {
+    model: 'test-model',
+    input: [{ type: 'additional_tools', role: 'developer', tools: [current] }],
+    tools: [stale],
+  };
+
+  translateRequestBody(body);
+
+  const definitions = body.tools.filter((tool) => tool.name === 'changing_tool');
+  assert.equal(definitions.length, 1);
+  assert.equal(definitions[0].description, 'current turn definition');
+  assert.deepEqual(definitions[0].parameters, current.parameters);
+});
+
 test('image auto-routing sends a current user attachment to the vision model', () => {
   const model = routeModel({
     model: 'text-model',

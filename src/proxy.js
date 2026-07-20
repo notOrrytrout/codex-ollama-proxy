@@ -201,6 +201,24 @@ function flattenDiscoveredTools(tools) {
   return out;
 }
 
+// Ollama-compatible providers require unique function names. Walk backward so
+// turn-local additional_tools definitions, which are appended during lifting,
+// override stale definitions already present in the top-level tools array.
+function dedupeFunctionTools(tools) {
+  const seen = new Set();
+  const deduped = [];
+  for (let index = tools.length - 1; index >= 0; index -= 1) {
+    const tool = tools[index];
+    if (tool && tool.type === 'function' && tool.name) {
+      if (seen.has(tool.name)) continue;
+      seen.add(tool.name);
+    }
+    deduped.push(tool);
+  }
+  deduped.reverse();
+  return deduped;
+}
+
 function log(...args) {
   process.stderr.write('[shape-proxy] ' + args.join(' ') + '\n');
 }
@@ -534,8 +552,13 @@ function translateRequestBody(body) {
       mapped.push(imagine.PROXY_STATUS_FN);
       toolsChanged = true;
     }
+    const deduped = dedupeFunctionTools(mapped);
+    if (deduped.length !== mapped.length) {
+      debugLog('removed ' + (mapped.length - deduped.length) + ' duplicate function tool definition(s)');
+      toolsChanged = true;
+    }
     if (toolsChanged) {
-      body.tools = mapped;
+      body.tools = deduped;
       debugLog('rewrote request tools for Ollama-compatible function surface');
     }
   }
