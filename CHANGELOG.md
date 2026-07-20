@@ -4,6 +4,7 @@
 
 - Removed the multi-second cold `find_skill` stall by serving an immediate filesystem index while the exact Codex app-server inventory refreshes asynchronously.
 - Replaced blocking app-server skill discovery during startup with one nonblocking interactive process.
+- Removed duplicate function definitions before forwarding requests, with turn-local `additional_tools` definitions taking precedence over stale top-level schemas.
 - Stabilized streamed Responses lifecycles so `[DONE]`, EOF, and upstream completion produce one ordered `response.completed` event.
 - Upstream failures now produce a complete `response.created` → `response.in_progress` → `response.failed` lifecycle instead of closing silently.
 - Client disconnects now cancel the active upstream stream, and proxy-fulfilled multi-turn streams preserve one lifecycle through the final assistant response.
