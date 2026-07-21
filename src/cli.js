@@ -7,6 +7,7 @@ const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const presets = require('./presets');
 const imagineConfig = require('./imagine-config');
+const launcherState = require('./launcher-state');
 const { requireVerifiedProxyListeners } = require('./process-lifecycle');
 
 const PACKAGE_DIR = path.resolve(__dirname, '..');
@@ -14,6 +15,7 @@ const CODEX_DIR = process.env.CODEX_HOME || path.join(process.env.HOME, '.codex'
 const RUNTIME_DIR = path.join(CODEX_DIR, 'ollama-shape-proxy');
 const ROUTE_CONFIG = path.join(RUNTIME_DIR, 'proxy-models.toml');
 const IMAGINE_CONFIG = path.join(RUNTIME_DIR, 'imagine.toml');
+const LAUNCHER_STATE = path.join(RUNTIME_DIR, 'launcher-state.json');
 const DEFAULT_ROUTE_CONFIG = path.join(PACKAGE_DIR, 'config', 'proxy-models.default.toml');
 const DEFAULT_MODEL_CATALOG = path.join(PACKAGE_DIR, 'config', 'model-catalogs', 'ollama-launch-models.default.json');
 const MODEL_CATALOG = path.join(CODEX_DIR, 'ollama-launch-models-ollama-working.json');
@@ -205,6 +207,7 @@ function applyPreset(name, flags = {}) {
   text = writeRouteValue(text, 'active_preset', name);
   text = applyImagineConfigToText(text);
   fs.writeFileSync(ROUTE_CONFIG, text, 'utf8');
+  launcherState.write(LAUNCHER_STATE, launcherState.fromPreset(preset));
   console.log(`preset_applied=${name}`);
   console.log(`updated=${ROUTE_CONFIG}`);
   console.log(`adaptor=${preset.adaptor}`);
@@ -308,6 +311,7 @@ function switchMode(mode, flags) {
   codexConfig(args);
   if (!flags.noStart) {
     const proxyPort = parseInt(process.env.PROXY_PORT || PROXY_PORT, 10);
+    launcherState.write(LAUNCHER_STATE, { version: launcherState.VERSION, adaptor: 'none' });
     bootoutLaunchAgent();
     stopListeningPort(proxyPort);
     install();
@@ -462,9 +466,20 @@ async function waitForProxyResponse(port, timeoutMs = 6000) {
 
 function renderPlist() {
   const template = fs.readFileSync(path.join(PACKAGE_DIR, 'config', 'launchd.plist.template'), 'utf8');
+  let state = launcherState.read(LAUNCHER_STATE);
+  if (!state) {
+    const activePreset = readRouteValue(readRouteConfig(), 'active_preset', '');
+    state = activePreset
+      ? launcherState.fromPreset(presets.readPreset(RUNTIME_DIR, activePreset))
+      : { version: launcherState.VERSION, adaptor: 'none' };
+    launcherState.write(LAUNCHER_STATE, state);
+  }
   return template
-    .replaceAll('__NODE__', process.execPath)
-    .replaceAll('__BIN__', path.join(PACKAGE_DIR, 'bin', 'codex-ollama-proxy'))
+    .replaceAll('__PROGRAM_ARGUMENTS__', launcherState.renderProgramArgumentsXml(
+      state,
+      process.execPath,
+      path.join(PACKAGE_DIR, 'bin', 'codex-ollama-proxy'),
+    ))
     .replaceAll('__LOG__', path.join(RUNTIME_DIR, 'proxy.log'))
     .replaceAll('__PORT__', PROXY_PORT);
 }
@@ -536,7 +551,15 @@ async function serveCmd(flags = {}) {
   if (!await ensureProxyCanStart(flags, proxyPort)) return null;
   // "none" (or no --adaptor) means a direct Responses-API upstream (local
   // Ollama or a hosted Responses endpoint) — no adaptor process is started.
-  if (!flags.adaptor || flags.adaptor === 'none') return require('./proxy').startServer();
+  if (!flags.adaptor || flags.adaptor === 'none') {
+    const proxyServer = require('./proxy').startServer();
+    await launcherState.writeWhenListening(
+      LAUNCHER_STATE,
+      { version: launcherState.VERSION, adaptor: 'none' },
+      [proxyServer],
+    );
+    return proxyServer;
+  }
   if (flags.adaptor !== 'chat-completion') {
     die('Error: --adaptor must be "chat-completion" or "none".');
   }
@@ -548,6 +571,12 @@ async function serveCmd(flags = {}) {
   const providerModel = flags.completionModel || readRouteValue(routeConfig, 'text_model');
   if (!providerUrl) die('Error: configure the chat-completion provider with: codex-ollama-proxy upstream --url URL [--api-key KEY]');
 
+  const savedLauncherState = {
+    version: launcherState.VERSION,
+    adaptor: 'chat-completion',
+    adaptor_port: parseInt(adaptorPort, 10),
+  };
+  if (flags.completionModel) savedLauncherState.completion_model = String(flags.completionModel);
   const adaptor = require('../adaptor/completion-api-adaptor');
   const adaptorServer = adaptor.startServer({
     port: parseInt(adaptorPort, 10),
@@ -559,6 +588,7 @@ async function serveCmd(flags = {}) {
   process.env.PROXY_UPSTREAM_URL = `http://127.0.0.1:${adaptorPort}/v1`;
   process.env.PROXY_UPSTREAM_API_KEY = '';
   const proxyServer = require('./proxy').startServer();
+  await launcherState.writeWhenListening(LAUNCHER_STATE, savedLauncherState, [adaptorServer, proxyServer]);
 
   function closeServer(server) {
     try {

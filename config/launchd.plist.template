@@ -6,9 +6,7 @@
   <string>com.user.codex-ollama-shape-proxy</string>
   <key>ProgramArguments</key>
   <array>
-    <string>__NODE__</string>
-    <string>__BIN__</string>
-    <string>serve</string>
+__PROGRAM_ARGUMENTS__
   </array>
   <key>EnvironmentVariables</key>
   <dict>

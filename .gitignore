@@ -8,4 +8,5 @@ node_modules/
 proxy-models.toml
 proxy-models.toml.local
 imagine.toml
+launcher-state.json
 presets/*.toml

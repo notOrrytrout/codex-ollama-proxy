@@ -1,0 +1,153 @@
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+
+const VERSION = 1;
+const DEFAULT_ADAPTOR_PORT = 8787;
+const ALLOWED_KEYS = new Set(['version', 'adaptor', 'adaptor_port', 'completion_model']);
+
+function normalize(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error('launcher state must be an object');
+  }
+  for (const key of Object.keys(input)) {
+    if (!ALLOWED_KEYS.has(key)) throw new Error(`unknown launcher state key "${key}"`);
+  }
+  if (input.version !== VERSION) throw new Error(`unsupported launcher state version "${input.version}"`);
+  if (input.adaptor !== 'none' && input.adaptor !== 'chat-completion') {
+    throw new Error(`unsupported adaptor "${input.adaptor}" in launcher state`);
+  }
+
+  const state = { version: VERSION, adaptor: input.adaptor };
+  if (state.adaptor === 'chat-completion') {
+    const port = input.adaptor_port === undefined ? DEFAULT_ADAPTOR_PORT : Number(input.adaptor_port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      throw new Error('launcher state adaptor_port must be an integer from 1 to 65535');
+    }
+    state.adaptor_port = port;
+    if (input.completion_model !== undefined) {
+      if (typeof input.completion_model !== 'string' || input.completion_model.trim() === '') {
+        throw new Error('launcher state completion_model must be a non-empty string');
+      }
+      state.completion_model = input.completion_model;
+    }
+  }
+  return state;
+}
+
+function read(file) {
+  if (!fs.existsSync(file)) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    throw new Error(`invalid launcher state at ${file}: ${error.message}`);
+  }
+  return normalize(parsed);
+}
+
+function write(file, input) {
+  const state = normalize(input);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const temporary = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(state, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(temporary, file);
+    fs.chmodSync(file, 0o600);
+  } finally {
+    try { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); } catch {}
+  }
+  return state;
+}
+
+function serveArgs(input) {
+  const state = normalize(input);
+  const args = ['serve'];
+  if (state.adaptor === 'chat-completion') {
+    args.push('--adaptor', state.adaptor, '--adaptor-port', String(state.adaptor_port));
+    if (state.completion_model) args.push('--completion-model', state.completion_model);
+  }
+  return args;
+}
+
+function fromPreset(preset) {
+  return normalize({
+    version: VERSION,
+    adaptor: preset && preset.adaptor === 'chat-completion' ? 'chat-completion' : 'none',
+  });
+}
+
+function escapeXml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;');
+}
+
+function renderProgramArgumentsXml(input, nodePath, binPath) {
+  return [nodePath, binPath, ...serveArgs(input)]
+    .map((argument) => `    <string>${escapeXml(argument)}</string>`)
+    .join('\n');
+}
+
+function writeWhenListening(file, input, servers) {
+  const state = normalize(input);
+  return new Promise((resolve, reject) => {
+    const pending = new Set(servers || []);
+    const handlers = new Map();
+
+    function cleanup() {
+      for (const [server, handler] of handlers) {
+        server.removeListener('listening', handler.listening);
+        server.removeListener('error', handler.error);
+      }
+    }
+
+    function commitIfReady() {
+      if (pending.size !== 0) return;
+      cleanup();
+      try {
+        resolve(write(file, state));
+      } catch (error) {
+        reject(error);
+      }
+    }
+
+    for (const server of pending) {
+      if (server && server.listening) {
+        pending.delete(server);
+        continue;
+      }
+      const handler = {
+        listening: () => {
+          pending.delete(server);
+          commitIfReady();
+        },
+        error: (error) => {
+          cleanup();
+          reject(error);
+        },
+      };
+      handlers.set(server, handler);
+      server.once('listening', handler.listening);
+      server.once('error', handler.error);
+    }
+    commitIfReady();
+  });
+}
+
+module.exports = {
+  DEFAULT_ADAPTOR_PORT,
+  VERSION,
+  fromPreset,
+  normalize,
+  read,
+  renderProgramArgumentsXml,
+  serveArgs,
+  write,
+  writeWhenListening,
+};

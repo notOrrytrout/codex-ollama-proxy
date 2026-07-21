@@ -1,0 +1,146 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { EventEmitter } = require('events');
+
+const launcherState = require('../src/launcher-state');
+
+test('normalizes direct and chat-completion launcher state', () => {
+  assert.deepEqual(launcherState.normalize({ version: 1, adaptor: 'none' }), {
+    version: 1,
+    adaptor: 'none',
+  });
+  assert.deepEqual(launcherState.normalize({
+    version: 1,
+    adaptor: 'chat-completion',
+    adaptor_port: '9123',
+    completion_model: 'provider/model',
+  }), {
+    version: 1,
+    adaptor: 'chat-completion',
+    adaptor_port: 9123,
+    completion_model: 'provider/model',
+  });
+});
+
+test('rejects invalid, unknown, and secret launcher-state fields', () => {
+  assert.throws(() => launcherState.normalize({ version: 1, adaptor: 'other' }), /unsupported adaptor/u);
+  assert.throws(() => launcherState.normalize({ version: 1, adaptor: 'none', upstream_api_key: 'secret' }), /unknown launcher state key/u);
+  assert.throws(() => launcherState.normalize({ version: 1, adaptor: 'chat-completion', adaptor_port: 70000 }), /adaptor_port/u);
+});
+
+test('writes launcher state atomically with private permissions and reads it back', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-launcher-state-'));
+  const file = path.join(dir, 'launcher-state.json');
+  try {
+    launcherState.write(file, {
+      version: 1,
+      adaptor: 'chat-completion',
+      adaptor_port: 8787,
+      completion_model: 'override-model',
+    });
+    assert.deepEqual(launcherState.read(file), {
+      version: 1,
+      adaptor: 'chat-completion',
+      adaptor_port: 8787,
+      completion_model: 'override-model',
+    });
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    assert.deepEqual(fs.readdirSync(dir), ['launcher-state.json']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('renders only non-secret serve arguments needed to restore the launcher', () => {
+  assert.deepEqual(launcherState.serveArgs({ version: 1, adaptor: 'none' }), ['serve']);
+  assert.deepEqual(launcherState.serveArgs({
+    version: 1,
+    adaptor: 'chat-completion',
+    adaptor_port: 9123,
+    completion_model: 'provider/model',
+  }), [
+    'serve',
+    '--adaptor', 'chat-completion',
+    '--adaptor-port', '9123',
+    '--completion-model', 'provider/model',
+  ]);
+});
+
+test('derives migration state from an active preset without copying route values', () => {
+  assert.deepEqual(launcherState.fromPreset({ adaptor: 'none', values: { upstream_api_key: 'secret' } }), {
+    version: 1,
+    adaptor: 'none',
+  });
+  assert.deepEqual(launcherState.fromPreset({ adaptor: 'chat-completion', values: { text_model: 'text', upstream_api_key: 'secret' } }), {
+    version: 1,
+    adaptor: 'chat-completion',
+    adaptor_port: 8787,
+  });
+});
+
+test('renders XML-safe launchd program arguments from launcher state', () => {
+  assert.equal(
+    launcherState.renderProgramArgumentsXml(
+      { version: 1, adaptor: 'chat-completion', adaptor_port: 9123, completion_model: 'provider&model' },
+      '/path/to/node',
+      '/path/to/codex-ollama-proxy',
+    ),
+    [
+      '    <string>/path/to/node</string>',
+      '    <string>/path/to/codex-ollama-proxy</string>',
+      '    <string>serve</string>',
+      '    <string>--adaptor</string>',
+      '    <string>chat-completion</string>',
+      '    <string>--adaptor-port</string>',
+      '    <string>9123</string>',
+      '    <string>--completion-model</string>',
+      '    <string>provider&amp;model</string>',
+    ].join('\n'),
+  );
+});
+
+test('commits launcher state only after every server is listening', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-launcher-listening-'));
+  const file = path.join(dir, 'launcher-state.json');
+  const proxy = new EventEmitter();
+  const adaptor = new EventEmitter();
+  try {
+    const committed = launcherState.writeWhenListening(file, {
+      version: 1,
+      adaptor: 'chat-completion',
+      adaptor_port: 8787,
+    }, [proxy, adaptor]);
+    proxy.emit('listening');
+    assert.equal(fs.existsSync(file), false);
+    adaptor.emit('listening');
+    await committed;
+    assert.equal(launcherState.read(file).adaptor, 'chat-completion');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('does not commit launcher state when a server fails before listening', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-launcher-error-'));
+  const file = path.join(dir, 'launcher-state.json');
+  const proxy = new EventEmitter();
+  const adaptor = new EventEmitter();
+  try {
+    const committed = launcherState.writeWhenListening(file, {
+      version: 1,
+      adaptor: 'chat-completion',
+      adaptor_port: 8787,
+    }, [proxy, adaptor]);
+    proxy.emit('listening');
+    adaptor.emit('error', new Error('port occupied'));
+    await assert.rejects(committed, /port occupied/u);
+    assert.equal(fs.existsSync(file), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

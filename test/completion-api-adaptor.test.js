@@ -231,7 +231,10 @@ test('CLI serve --adaptor chat-completion starts proxy plus adaptor using upstre
   const provider = http.createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/v1/models') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ object: 'list', data: [{ id: 'test-model', object: 'model' }] }));
+      res.end(JSON.stringify({ object: 'list', data: [
+        { id: 'text-model', object: 'model' },
+        { id: 'vision-model', object: 'model' },
+      ] }));
       return;
     }
     if (req.method !== 'POST' || req.url !== '/v1/chat/completions') {
@@ -250,7 +253,7 @@ test('CLI serve --adaptor chat-completion starts proxy plus adaptor using upstre
       res.end(JSON.stringify({
         id: 'chatcmpl_integration',
         object: 'chat.completion',
-        choices: [{ message: { role: 'assistant', content: 'integration ok' } }],
+        choices: [{ message: { role: 'assistant', content: received.at(-1).body.model + ' ok' } }],
       }));
     });
   });
@@ -261,8 +264,8 @@ test('CLI serve --adaptor chat-completion starts proxy plus adaptor using upstre
   const runtimeDir = path.join(codexHome, 'ollama-shape-proxy');
   fs.mkdirSync(runtimeDir, { recursive: true });
   fs.writeFileSync(path.join(runtimeDir, 'proxy-models.toml'), [
-    'text_model = "test-model"',
-    'image_model = "test-model"',
+    'text_model = "text-model"',
+    'image_model = "vision-model"',
     `upstream_url = "http://127.0.0.1:${providerPort}/v1"`,
     'upstream_api_key = "provider-secret"',
     'auto_route_image = true',
@@ -293,18 +296,39 @@ test('CLI serve --adaptor chat-completion starts proxy plus adaptor using upstre
   try {
     await waitForHttp(proxyPort, '/v1/models');
     const response = await postJson(proxyPort, '/v1/responses', {
-      model: 'test-model',
+      model: 'text-model',
       input: 'hello integration',
       stream: false,
       tools: [],
     });
 
     assert.equal(response.statusCode, 200);
-    assert.equal(response.body.output_text, 'integration ok');
-    assert.equal(received.length, 1);
+    const imageResponse = await postJson(proxyPort, '/v1/responses', {
+      model: 'text-model',
+      input: [{
+        role: 'user',
+        content: [
+          { type: 'input_text', text: 'inspect image' },
+          { type: 'input_image', image_url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=' },
+        ],
+      }],
+      stream: false,
+      tools: [],
+    });
+
+    assert.equal(response.body.output_text, 'text-model ok');
+    assert.equal(imageResponse.statusCode, 200);
+    assert.equal(imageResponse.body.output_text, 'vision-model ok');
+    assert.equal(received.length, 2);
     assert.equal(received[0].authorization, 'Bearer provider-secret');
-    assert.equal(received[0].body.model, 'test-model');
+    assert.equal(received[0].body.model, 'text-model');
     assert.deepEqual(received[0].body.messages, [{ role: 'user', content: 'hello integration' }]);
+    assert.equal(received[1].body.model, 'vision-model');
+    assert.equal(received[1].body.messages[0].content[1].type, 'image_url');
+    assert.deepEqual(
+      JSON.parse(fs.readFileSync(path.join(runtimeDir, 'launcher-state.json'), 'utf8')),
+      { version: 1, adaptor: 'chat-completion', adaptor_port: adaptorPort },
+    );
   } finally {
     child.kill('SIGTERM');
     await new Promise((resolve) => child.once('exit', resolve));
