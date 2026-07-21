@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const schema = require('./route-config-schema');
 
 function die(message) {
   const error = new Error(message);
@@ -32,6 +33,8 @@ function presetPath(runtimeDir, name) {
   return path.join(presetsDir(runtimeDir), name + '.toml');
 }
 
+// --- type-aware TOML readers (mirror proxy.js loadRouteConfig parsing) -----
+
 function readTomlString(text, key, fallback = '') {
   const match = text.match(new RegExp('^\\s*' + key + '\\s*=\\s*"((?:\\\\.|[^"])*)"', 'm'));
   return match ? unescapeTomlString(match[1]) : fallback;
@@ -42,42 +45,92 @@ function readTomlBool(text, key, fallback = false) {
   return match ? match[1] === 'true' : fallback;
 }
 
+function readTomlNumber(text, key, fallback = 0) {
+  const match = text.match(new RegExp('^\\s*' + key + '\\s*=\\s*(\\d+)\\b', 'm'));
+  return match ? Number(match[1]) : fallback;
+}
+
+function readTomlKey(text, def) {
+  if (def.type === 'bool') return readTomlBool(text, def.key, def.default);
+  if (def.type === 'number') return readTomlNumber(text, def.key, def.default);
+  return readTomlString(text, def.key, def.default);
+}
+
+function renderValue(def, value) {
+  if (def.type === 'bool') return value ? 'true' : 'false';
+  if (def.type === 'number') return String(Number(value) || 0);
+  return `"${escapeTomlString(value)}"`;
+}
+
+// A preset is a saved partial proxy-models.toml: a bag of the non-imagine
+// ROUTE_CFG keys the user chose to pin, plus the special `adaptor` launcher
+// field (none|chat-completion). Keys the preset does not store keep the
+// template default at apply time — this is the single source of truth the
+// proxy already reads, so new toggles become preset-able with no schema
+// surgery here.
+
+// Render the preset TOML. `adaptor` is always written first; then every stored
+// config value in schema order. Required keys (upstream_url, text_model) are
+// always present; image_model is always present (derived from text_model when
+// not explicitly set), preserving the --model/--text-model shorthand.
 function renderPresetToml(preset) {
-  const lines = [
-    '# codex-ollama-proxy preset',
-    `adaptor = "${escapeTomlString(preset.adaptor)}"`,
-    `upstream_url = "${escapeTomlString(preset.upstream_url)}"`,
-  ];
-  if (preset.upstream_api_key !== undefined) {
-    lines.push(`upstream_api_key = "${escapeTomlString(preset.upstream_api_key)}"`);
+  const lines = ['# codex-ollama-proxy preset', `adaptor = "${escapeTomlString(preset.adaptor)}"`];
+  for (const def of schema.PRESET_KEY_DEFS) {
+    if (def.key in preset.values) {
+      lines.push(`${def.key} = ${renderValue(def, preset.values[def.key])}`);
+    }
   }
-  lines.push(
-    `text_model = "${escapeTomlString(preset.text_model)}"`,
-    `image_model = "${escapeTomlString(preset.image_model)}"`,
-    `auto_route_image = ${preset.auto_route_image ? 'true' : 'false'}`,
-  );
   lines.push('');
   return lines.join('\n');
 }
 
 function normalizePreset(name, text) {
-  const preset = {
-    name,
-    adaptor: readTomlString(text, 'adaptor'),
-    upstream_url: readTomlString(text, 'upstream_url'),
-    upstream_api_key: readTomlString(text, 'upstream_api_key', undefined),
-    text_model: readTomlString(text, 'text_model'),
-    image_model: readTomlString(text, 'image_model'),
-    auto_route_image: readTomlBool(text, 'auto_route_image', false),
-  };
-  if (!preset.adaptor || !preset.upstream_url || !preset.text_model) {
-    die(`Error: preset ${name} is missing adaptor, upstream_url, or text_model.`);
+  const adaptor = readTomlString(text, 'adaptor', 'none');
+  if (adaptor !== 'none' && adaptor !== 'chat-completion') {
+    die(`Error: preset ${name} uses unsupported adaptor "${adaptor}". Supported: "chat-completion" (Chat Completions provider via the adaptor) or "none" (direct Responses API, e.g. local Ollama or a hosted Responses endpoint).`);
   }
-  if (!preset.image_model) preset.image_model = preset.text_model;
-  if (preset.adaptor !== 'chat-completion') {
-    die(`Error: preset ${name} uses unsupported adaptor "${preset.adaptor}".`);
+
+  // Collect every top-level key declared in the preset file so we can validate
+  // it against the known schema (catches typos'd/hand-edited presets early).
+  const declared = new Set();
+  for (const line of text.split('\n')) {
+    const m = line.match(/^\s*([A-Za-z_]+)\s*=/);
+    if (m) declared.add(m[1]);
   }
-  return preset;
+  for (const key of declared) {
+    if (key === 'adaptor') continue;
+    if (!(key in schema.PRESET_KEYS)) {
+      die(`Error: preset ${name} has unknown key "${key}". Valid keys: ${Object.keys(schema.PRESET_KEYS).join(', ')} (imagine_* keys are composed from imagine.toml, not stored in presets).`);
+    }
+  }
+
+  const values = {};
+  for (const def of schema.PRESET_KEY_DEFS) {
+    // Only record keys the preset actually declares. This keeps the preset a
+    // true partial config: undeclared keys fall back to the template default
+    // at apply time rather than being pinned by the preset.
+    if (!declared.has(def.key)) continue;
+    values[def.key] = readTomlKey(text, def);
+  }
+
+  // Required fields.
+  for (const key of schema.REQUIRED_PRESET_KEYS) {
+    if (!(key in values) || values[key] === '' || values[key] == null) {
+      die(`Error: preset ${name} is missing ${key}.`);
+    }
+  }
+  // image_model is a derived shorthand: if not explicitly set, mirror
+  // text_model so a single --model/--text-model is enough (matches `switch
+  // ollama --model`). It is always present in the stored preset.
+  if (!('image_model' in values) || values.image_model === '') {
+    values.image_model = values.text_model;
+  }
+  // auto_route_image is a core identity field, always resolved by the preset
+  // (false when absent) so a preset fully determines image routing — matching
+  // addPreset, which always stores it.
+  if (!('auto_route_image' in values)) values.auto_route_image = false;
+
+  return { name, adaptor, values };
 }
 
 function readPreset(runtimeDir, name) {
@@ -86,31 +139,70 @@ function readPreset(runtimeDir, name) {
   return normalizePreset(name, fs.readFileSync(file, 'utf8'));
 }
 
-function addPreset(runtimeDir, name, flags, log = console.log) {
-  validatePresetName(name);
-  if (!flags.adaptor) die('Error: preset add requires --adaptor chat-completion.');
-  if (flags.adaptor !== 'chat-completion') die('Error: --adaptor must be "chat-completion".');
+// Map CLI flags -> preset config keys. Booleans use paired --flag/--no-flag
+// forms; a toggle is only stored when one of the pair is passed (undeclared
+// toggles keep the template default at apply time). Required keys (upstream_url,
+// text_model) are always stored; image_model is always stored (derived).
+function flagsToValues(flags) {
+  const values = {};
+
   if (!flags.url) die('Error: preset add requires --url URL.');
-  if (!flags.textModel) die('Error: preset add requires --text-model MODEL.');
-  if (flags.apiKey === '') {
-    die('Error: --api-key was passed but empty. Check your shell variable with: echo ${NVIDIA_API_KEY:+set}');
-  }
   try {
     const url = new URL(flags.url);
     if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('must use http or https');
   } catch (err) {
     die('Error: --url must be an absolute http(s) URL. ' + err.message);
   }
+  values.upstream_url = flags.url;
+
+  // --model is a shorthand that sets both text_model and image_model (mirrors
+  // `switch ollama --model`). --text-model/--image-model override it per-field.
+  const textModel = flags.textModel || flags.model;
+  if (!textModel) die('Error: preset add requires --text-model MODEL (or --model MODEL to set both).');
+  values.text_model = textModel;
+  values.image_model = flags.imageModel || textModel;
+
+  if (flags.apiKey === '') {
+    die('Error: --api-key was passed but empty. Check your shell variable with: echo ${NVIDIA_API_KEY:+set}');
+  }
+  if (flags.apiKey !== undefined) values.upstream_api_key = flags.apiKey || '';
+
+  // auto_route_image is a core provider-identity field, always stored so a
+  // preset fully determines image routing. It defaults to false (off) when
+  // neither --auto-image nor --no-auto-image is given, preserving historical
+  // behavior — the behavior toggles below remain true partial config (stored
+  // only when their flag is passed, template-default otherwise).
+  values.auto_route_image = Boolean(flags.autoImage) && !flags.noAutoImage;
+
+  if (flags.dedupeLargeInput) values.dedupe_large_input = true;
+  else if (flags.noDedupeLargeInput) values.dedupe_large_input = false;
+  if (flags.dedupeMinChars !== undefined) {
+    const n = Number(flags.dedupeMinChars);
+    if (!Number.isInteger(n) || n < 0) die('Error: --dedupe-min-chars must be a non-negative integer.');
+    values.duplicate_input_min_chars = n;
+  }
+
+  if (flags.verboseTools) values.verbose_tools = true;
+  else if (flags.noVerboseTools) values.verbose_tools = false;
+  if (flags.logUpstreamBody) values.log_upstream_body = true;
+  else if (flags.noLogUpstreamBody) values.log_upstream_body = false;
+  if (flags.enableFindSkill) values.enable_find_skill = true;
+  else if (flags.noEnableFindSkill) values.enable_find_skill = false;
+  if (flags.streamLoop) values.stream_proxy_loop = true;
+  else if (flags.noStreamLoop) values.stream_proxy_loop = false;
+
+  return values;
+}
+
+function addPreset(runtimeDir, name, flags, log = console.log) {
+  validatePresetName(name);
+  const adaptor = flags.adaptor || 'none';
+  if (adaptor !== 'none' && adaptor !== 'chat-completion') die('Error: --adaptor must be "chat-completion" or "none".');
+
+  const values = flagsToValues(flags);
 
   fs.mkdirSync(presetsDir(runtimeDir), { recursive: true });
-  const preset = {
-    adaptor: flags.adaptor,
-    upstream_url: flags.url,
-    ...(flags.apiKey !== undefined ? { upstream_api_key: flags.apiKey || '' } : {}),
-    text_model: flags.textModel,
-    image_model: flags.imageModel || flags.textModel,
-    auto_route_image: Boolean(flags.autoImage) && !flags.noAutoImage,
-  };
+  const preset = { name, adaptor, values };
   const file = presetPath(runtimeDir, name);
   fs.writeFileSync(file, renderPresetToml(preset), 'utf8');
   log(`preset=${name}`);
@@ -146,4 +238,7 @@ module.exports = {
   renderPresetToml,
   showPreset,
   validatePresetName,
+  normalizePreset,
+  flagsToValues,
+  PRESET_KEY_DEFS: schema.PRESET_KEY_DEFS,
 };

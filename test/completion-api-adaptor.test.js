@@ -380,6 +380,8 @@ test('CLI run PRESET applies preset and starts proxy plus chat-completion adapto
     '--foreground',
     '--adaptor-port',
     String(adaptorPort),
+    '--dedupe-min-chars',
+    '0',
   ], {
     cwd: path.join(__dirname, '..'),
     env: Object.assign({}, process.env, {
@@ -419,6 +421,7 @@ test('CLI run PRESET applies preset and starts proxy plus chat-completion adapto
 
   assert.match(stdout, /preset_applied=fake-provider/);
   assert.match(stdout, /completion-api-adaptor/);
+  assert.match(stderr, /duplicate_input_min_chars=0/);
   assert.doesNotMatch(stderr, /Error|EADDRINUSE|Unhandled/u);
 });
 
@@ -485,6 +488,8 @@ test('CLI run PRESET detaches after proxy starts', async () => {
       '--no-backup',
       '--adaptor-port',
       String(adaptorPort),
+      '--dedupe-min-chars',
+      '0',
     ], {
       cwd: path.join(__dirname, '..'),
       env: Object.assign({}, process.env, {
@@ -509,6 +514,8 @@ test('CLI run PRESET detaches after proxy starts', async () => {
     assert.equal(response.statusCode, 200);
     assert.equal(response.body.output_text, 'detached run ok');
     assert.equal(received[0].authorization, 'Bearer detached-secret');
+    const log = fs.readFileSync(path.join(codexHome, 'ollama-shape-proxy', 'proxy.log'), 'utf8');
+    assert.match(log, /duplicate_input_min_chars=0/);
   } finally {
     killListeningPort(proxyPort);
     killListeningPort(adaptorPort);
@@ -710,6 +717,148 @@ test('CLI serve --adaptor chat-completion treats an existing healthy proxy as al
   } finally {
     if (!child.killed) child.kill('SIGTERM');
     await close(existingProxy);
+    fs.rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+test('CLI preset add with no --adaptor stores a direct (adaptor "none") preset and run talks straight to the provider', async () => {
+  const received = [];
+  const provider = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/models') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ object: 'list', data: [{ id: 'direct-model', object: 'model' }] }));
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/v1/responses') {
+      const chunks = [];
+      req.on('data', (chunk) => chunks.push(chunk));
+      req.on('end', () => {
+        received.push({
+          authorization: req.headers.authorization,
+          body: JSON.parse(Buffer.concat(chunks).toString('utf8')),
+        });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          id: 'resp_direct',
+          object: 'response',
+          status: 'completed',
+          model: 'direct-model',
+          output: [{ type: 'message', id: 'msg_direct', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'direct ok' }] }],
+          output_text: 'direct ok',
+        }));
+      });
+      return;
+    }
+    // Unknown routes (including the proxy's startup /api/tags probe) 404 so the
+    // model-availability check skips silently without an adaptor in the path.
+    res.writeHead(404, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'unexpected route' }));
+  });
+  const providerPort = await listen(provider);
+  const proxyPort = await freePort();
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-direct-preset-'));
+  fs.writeFileSync(path.join(codexHome, 'config.toml'), 'sandbox_mode = "danger-full-access"\n', 'utf8');
+
+  try {
+    // No --adaptor: defaults to "none" (direct Responses API).
+    const add = spawnSync(process.execPath, [
+      path.join(__dirname, '..', 'bin', 'codex-ollama-proxy'),
+      'preset',
+      'add',
+      'direct-provider',
+      '--url',
+      `http://127.0.0.1:${providerPort}/v1`,
+      '--text-model',
+      'direct-model',
+      '--api-key',
+      'direct-secret',
+    ], {
+      cwd: path.join(__dirname, '..'),
+      env: Object.assign({}, process.env, { CODEX_HOME: codexHome }),
+      encoding: 'utf8',
+    });
+    assert.equal(add.status, 0, add.stderr || add.stdout);
+
+    const presetPath = path.join(codexHome, 'ollama-shape-proxy', 'presets', 'direct-provider.toml');
+    const preset = fs.readFileSync(presetPath, 'utf8');
+    assert.match(preset, /^adaptor\s*=\s*"none"$/m);
+    assert.match(preset, /^upstream_url\s*=\s*"http:\/\/127\.0\.0\.1:\d+\/v1"$/m);
+    assert.match(preset, /^upstream_api_key\s*=\s*"direct-secret"$/m);
+
+    const child = spawn(process.execPath, [
+      path.join(__dirname, '..', 'bin', 'codex-ollama-proxy'),
+      'run',
+      'direct-provider',
+      '--no-refresh',
+      '--no-backup',
+      '--foreground',
+    ], {
+      cwd: path.join(__dirname, '..'),
+      env: Object.assign({}, process.env, {
+        CODEX_HOME: codexHome,
+        PROXY_PORT: String(proxyPort),
+        // Disable the find_skill prewarm so the proxy does not spawn the real
+        // Codex app-server (which materializes skills/.system under the temp
+        // CODEX_HOME and would race with the test's rmSync cleanup).
+        PROXY_FIND_SKILL: '0',
+      }),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk.toString('utf8'); });
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
+
+    try {
+      await waitForHttp(proxyPort, '/v1/models');
+      const response = await postJson(proxyPort, '/v1/responses', {
+        model: 'direct-model',
+        input: 'hello direct',
+        stream: false,
+        tools: [],
+      });
+      assert.equal(response.statusCode, 200);
+      assert.equal(response.body.output_text, 'direct ok');
+      // The proxy talked straight to the provider (no adaptor process).
+      assert.equal(received.length, 1);
+      assert.equal(received[0].authorization, 'Bearer direct-secret');
+      assert.equal(received[0].body.model, 'direct-model');
+    } finally {
+      child.kill('SIGTERM');
+      await new Promise((resolve) => child.once('exit', resolve));
+    }
+
+    assert.match(stdout, /preset_applied=direct-provider/);
+    assert.doesNotMatch(stdout, /completion-api-adaptor/);
+    assert.doesNotMatch(stderr, /Error|EADDRINUSE|Unhandled/u);
+  } finally {
+    killListeningPort(proxyPort);
+    await close(provider);
+    fs.rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('CLI preset add rejects an unsupported adaptor value', () => {
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-preset-bad-adaptor-'));
+  try {
+    const result = spawnSync(process.execPath, [
+      path.join(__dirname, '..', 'bin', 'codex-ollama-proxy'),
+      'preset',
+      'add',
+      'bad',
+      '--adaptor',
+      'mqtt',
+      '--url',
+      'https://example.com/v1',
+      '--text-model',
+      'm',
+    ], {
+      cwd: path.join(__dirname, '..'),
+      env: Object.assign({}, process.env, { CODEX_HOME: codexHome }),
+      encoding: 'utf8',
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr || result.stdout, /chat-completion" or "none"/);
+  } finally {
     fs.rmSync(codexHome, { recursive: true, force: true });
   }
 });

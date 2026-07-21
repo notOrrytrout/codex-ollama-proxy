@@ -345,6 +345,345 @@ test('CLI preset add rejects an explicitly empty API key', () => {
   }
 });
 
+test('CLI preset add --model sets both text and image model, and preset use --model overrides both for the run', () => {
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-cli-preset-model-shorthand-'));
+  const runtimeDir = path.join(codexHome, 'ollama-shape-proxy');
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, 'config.toml'), 'sandbox_mode = "danger-full-access"\n', 'utf8');
+
+  try {
+    // --model (no --text-model) is the shorthand for "default model for both".
+    const add = spawnSync(process.execPath, [
+      path.join(__dirname, '..', 'bin', 'codex-ollama-proxy'),
+      'preset',
+      'add',
+      'single',
+      '--url',
+      'https://provider.example.com/v1',
+      '--model',
+      'single-model',
+    ], {
+      cwd: path.join(__dirname, '..'),
+      env: Object.assign({}, process.env, { CODEX_HOME: codexHome }),
+      encoding: 'utf8',
+    });
+    assert.equal(add.status, 0, add.stderr || add.stdout);
+
+    const presetPath = path.join(runtimeDir, 'presets', 'single.toml');
+    const preset = fs.readFileSync(presetPath, 'utf8');
+    assert.match(preset, /^adaptor\s*=\s*"none"$/m);
+    assert.match(preset, /^text_model\s*=\s*"single-model"$/m);
+    assert.match(preset, /^image_model\s*=\s*"single-model"$/m);
+
+    // --model at use time overrides both text and image for this run only,
+    // without modifying the stored preset.
+    const use = spawnSync(process.execPath, [
+      path.join(__dirname, '..', 'bin', 'codex-ollama-proxy'),
+      'preset',
+      'use',
+      'single',
+      '--model',
+      'override-model',
+      '--no-refresh',
+      '--no-backup',
+      '--no-start',
+    ], {
+      cwd: path.join(__dirname, '..'),
+      env: Object.assign({}, process.env, { CODEX_HOME: codexHome }),
+      encoding: 'utf8',
+    });
+    assert.equal(use.status, 0, use.stderr || use.stdout);
+    assert.match(use.stdout, /preset_applied=single/);
+
+    const route = fs.readFileSync(path.join(runtimeDir, 'proxy-models.toml'), 'utf8');
+    assert.match(route, /^text_model\s*=\s*"override-model"$/m);
+    assert.match(route, /^image_model\s*=\s*"override-model"$/m);
+    assert.match(route, /^upstream_url\s*=\s*"https:\/\/provider\.example\.com\/v1"$/m);
+
+    // The stored preset is unchanged.
+    const presetAfter = fs.readFileSync(presetPath, 'utf8');
+    assert.match(presetAfter, /^text_model\s*=\s*"single-model"$/m);
+    assert.match(presetAfter, /^image_model\s*=\s*"single-model"$/m);
+  } finally {
+    fs.rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('CLI preset add stores any config toggle and preset use applies it (dynamic schema, no per-toggle surgery)', () => {
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-cli-preset-toggles-'));
+  const runtimeDir = path.join(codexHome, 'ollama-shape-proxy');
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, 'config.toml'), 'sandbox_mode = "danger-full-access"\n', 'utf8');
+
+  try {
+    const add = spawnSync(process.execPath, [
+      path.join(__dirname, '..', 'bin', 'codex-ollama-proxy'),
+      'preset',
+      'add',
+      'toggled',
+      '--url',
+      'https://provider.example.com/v1',
+      '--text-model',
+      't-model',
+      '--dedupe-large-input',
+      '--dedupe-min-chars',
+      '1024',
+      '--verbose-tools',
+      '--log-upstream-body',
+      '--enable-find-skill',
+      '--no-stream-loop',
+    ], {
+      cwd: path.join(__dirname, '..'),
+      env: Object.assign({}, process.env, { CODEX_HOME: codexHome }),
+      encoding: 'utf8',
+    });
+
+    assert.equal(add.status, 0, add.stderr || add.stdout);
+    const presetPath = path.join(runtimeDir, 'presets', 'toggled.toml');
+    const preset = fs.readFileSync(presetPath, 'utf8');
+    assert.match(preset, /^adaptor\s*=\s*"none"$/m);
+    assert.match(preset, /^dedupe_large_input\s*=\s*true$/m);
+    assert.match(preset, /^duplicate_input_min_chars\s*=\s*1024$/m);
+    assert.match(preset, /^verbose_tools\s*=\s*true$/m);
+    assert.match(preset, /^log_upstream_body\s*=\s*true$/m);
+    assert.match(preset, /^enable_find_skill\s*=\s*true$/m);
+    assert.match(preset, /^stream_proxy_loop\s*=\s*false$/m);
+
+    const use = spawnSync(process.execPath, [
+      path.join(__dirname, '..', 'bin', 'codex-ollama-proxy'),
+      'preset',
+      'use',
+      'toggled',
+      '--no-refresh',
+      '--no-backup',
+      '--no-start',
+    ], {
+      cwd: path.join(__dirname, '..'),
+      env: Object.assign({}, process.env, { CODEX_HOME: codexHome }),
+      encoding: 'utf8',
+    });
+
+    assert.equal(use.status, 0, use.stderr || use.stdout);
+    assert.match(use.stdout, /preset_applied=toggled/);
+    const route = fs.readFileSync(path.join(runtimeDir, 'proxy-models.toml'), 'utf8');
+    assert.match(route, /^dedupe_large_input\s*=\s*true$/m);
+    assert.match(route, /^duplicate_input_min_chars\s*=\s*1024$/m);
+    assert.match(route, /^verbose_tools\s*=\s*true$/m);
+    assert.match(route, /^log_upstream_body\s*=\s*true$/m);
+    assert.match(route, /^enable_find_skill\s*=\s*true$/m);
+    assert.match(route, /^stream_proxy_loop\s*=\s*false$/m);
+  } finally {
+    fs.rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('CLI preset without toggle flags leaves template defaults (partial config)', () => {
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-cli-preset-toggles-default-'));
+  const runtimeDir = path.join(codexHome, 'ollama-shape-proxy');
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, 'config.toml'), 'sandbox_mode = "danger-full-access"\n', 'utf8');
+
+  try {
+    const add = spawnSync(process.execPath, [
+      path.join(__dirname, '..', 'bin', 'codex-ollama-proxy'),
+      'preset',
+      'add',
+      'plain',
+      '--url',
+      'https://provider.example.com/v1',
+      '--text-model',
+      'p-model',
+    ], {
+      cwd: path.join(__dirname, '..'),
+      env: Object.assign({}, process.env, { CODEX_HOME: codexHome }),
+      encoding: 'utf8',
+    });
+    assert.equal(add.status, 0, add.stderr || add.stdout);
+    const preset = fs.readFileSync(path.join(runtimeDir, 'presets', 'plain.toml'), 'utf8');
+    assert.doesNotMatch(preset, /^dedupe_large_input\b/m);
+    assert.doesNotMatch(preset, /^stream_proxy_loop\b/m);
+    assert.doesNotMatch(preset, /^enable_find_skill\b/m);
+
+    const use = spawnSync(process.execPath, [
+      path.join(__dirname, '..', 'bin', 'codex-ollama-proxy'),
+      'preset',
+      'use',
+      'plain',
+      '--no-refresh',
+      '--no-backup',
+      '--no-start',
+    ], {
+      cwd: path.join(__dirname, '..'),
+      env: Object.assign({}, process.env, { CODEX_HOME: codexHome }),
+      encoding: 'utf8',
+    });
+    assert.equal(use.status, 0, use.stderr || use.stdout);
+    const route = fs.readFileSync(path.join(runtimeDir, 'proxy-models.toml'), 'utf8');
+    assert.match(route, /^dedupe_large_input\s*=\s*false$/m);
+    assert.match(route, /^stream_proxy_loop\s*=\s*true$/m);
+    assert.match(route, /^enable_find_skill\s*=\s*true$/m);
+  } finally {
+    fs.rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('preset normalize rejects an unknown key (schema validation)', () => {
+  const presets = require('../src/presets');
+  assert.throws(
+    () => presets.normalizePreset('bogus', [
+      '# codex-ollama-proxy preset',
+      'adaptor = "none"',
+      'upstream_url = "https://provider.example.com/v1"',
+      'text_model = "m"',
+      'not_a_real_key = true',
+    ].join('\n')),
+    /unknown key "not_a_real_key"/,
+  );
+});
+
+test('CLI preset use preserves replacement-token sequences in API keys', () => {
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-cli-preset-dollar-key-'));
+  const runtimeDir = path.join(codexHome, 'ollama-shape-proxy');
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, 'config.toml'), 'sandbox_mode = "danger-full-access"\n', 'utf8');
+
+  try {
+    const apiKey = 'provider-$&-$1-secret';
+    const add = spawnSync(process.execPath, [
+      path.join(__dirname, '..', 'bin', 'codex-ollama-proxy'),
+      'preset',
+      'add',
+      'literal-key',
+      '--url',
+      'https://provider.example.com/v1',
+      '--model',
+      'test-model',
+      '--api-key',
+      apiKey,
+    ], {
+      cwd: path.join(__dirname, '..'),
+      env: Object.assign({}, process.env, { CODEX_HOME: codexHome }),
+      encoding: 'utf8',
+    });
+    assert.equal(add.status, 0, add.stderr || add.stdout);
+
+    const use = spawnSync(process.execPath, [
+      path.join(__dirname, '..', 'bin', 'codex-ollama-proxy'),
+      'preset',
+      'use',
+      'literal-key',
+      '--no-refresh',
+      '--no-backup',
+      '--no-start',
+    ], {
+      cwd: path.join(__dirname, '..'),
+      env: Object.assign({}, process.env, { CODEX_HOME: codexHome }),
+      encoding: 'utf8',
+    });
+    assert.equal(use.status, 0, use.stderr || use.stdout);
+
+    const route = fs.readFileSync(path.join(runtimeDir, 'proxy-models.toml'), 'utf8');
+    assert.match(route, /^upstream_api_key\s*=\s*"provider-\$&-\$1-secret"$/m);
+  } finally {
+    fs.rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('CLI preset add rejects a fractional dedupe threshold', () => {
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-cli-preset-fractional-dedupe-'));
+
+  try {
+    const add = spawnSync(process.execPath, [
+      path.join(__dirname, '..', 'bin', 'codex-ollama-proxy'),
+      'preset',
+      'add',
+      'fractional',
+      '--url',
+      'https://provider.example.com/v1',
+      '--model',
+      'test-model',
+      '--dedupe-min-chars',
+      '0.5',
+    ], {
+      cwd: path.join(__dirname, '..'),
+      env: Object.assign({}, process.env, { CODEX_HOME: codexHome }),
+      encoding: 'utf8',
+    });
+
+    assert.equal(add.status, 1, add.stderr || add.stdout);
+    assert.match(add.stderr, /--dedupe-min-chars must be a non-negative integer/);
+  } finally {
+    fs.rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('CLI preset use stops when the route reset fails', () => {
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-cli-preset-reset-failure-'));
+  const runtimeDir = path.join(codexHome, 'ollama-shape-proxy');
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, 'config.toml'), 'sandbox_mode = "danger-full-access"\n', 'utf8');
+
+  try {
+    const add = spawnSync(process.execPath, [
+      path.join(__dirname, '..', 'bin', 'codex-ollama-proxy'),
+      'preset',
+      'add',
+      'reset-failure',
+      '--url',
+      'https://provider.example.com/v1',
+      '--model',
+      'provider-model',
+    ], {
+      cwd: path.join(__dirname, '..'),
+      env: Object.assign({}, process.env, { CODEX_HOME: codexHome }),
+      encoding: 'utf8',
+    });
+    assert.equal(add.status, 0, add.stderr || add.stdout);
+
+    const preload = path.join(codexHome, 'fail-first-route-write.js');
+    fs.writeFileSync(preload, [
+      "'use strict';",
+      "const fs = require('node:fs');",
+      "const path = require('node:path');",
+      "const target = path.join(process.env.CODEX_HOME, 'ollama-shape-proxy', 'proxy-models.toml');",
+      'const originalWriteFileSync = fs.writeFileSync;',
+      'let failed = false;',
+      'fs.writeFileSync = function patchedWriteFileSync(file, ...args) {',
+      '  if (!failed && path.resolve(String(file)) === path.resolve(target)) {',
+      '    failed = true;',
+      "    throw new Error('simulated route reset failure');",
+      '  }',
+      '  return originalWriteFileSync.call(this, file, ...args);',
+      '};',
+      '',
+    ].join('\n'), 'utf8');
+
+    const use = spawnSync(process.execPath, [
+      '--require',
+      preload,
+      path.join(__dirname, '..', 'bin', 'codex-ollama-proxy'),
+      'preset',
+      'use',
+      'reset-failure',
+      '--no-refresh',
+      '--no-backup',
+      '--no-start',
+    ], {
+      cwd: path.join(__dirname, '..'),
+      env: Object.assign({}, process.env, { CODEX_HOME: codexHome }),
+      encoding: 'utf8',
+    });
+
+    assert.equal(use.status, 1, use.stderr || use.stdout);
+    assert.match(use.stderr, /simulated route reset failure/);
+    assert.doesNotMatch(use.stdout, /preset_applied=reset-failure/);
+    const route = fs.readFileSync(path.join(runtimeDir, 'proxy-models.toml'), 'utf8');
+    assert.doesNotMatch(route, /provider\.example\.com|provider-model|active_preset/);
+  } finally {
+    fs.rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
 test('local Ollama capability discovery uses bounded show requests and preserves lookup failures as unknown', async () => {
   const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-config-capabilities-'));
   const previousCodexHome = process.env.CODEX_HOME;

@@ -2,91 +2,163 @@
 
 [npm package](https://www.npmjs.com/package/codex-ollama-proxy)
 
-Use Ollama, OpenRouter, and other Responses API providers with Codex while preserving Codex plugins, MCP tools, `tool_search`, and `apply_patch`.
+Use Ollama, OpenRouter, and other OpenAI-compatible providers with Codex while preserving:
 
-Codex normally sends plugins and MCP tools using OpenAI-specific namespace and dynamic-tool formats. Many custom providers reject or cannot interpret these formats, producing errors such as:
+* Codex plugins
+* MCP tools
+* `tool_search`
+* `apply_patch`
+* Image generation tools
 
-- `unsupported call`
-- MCP tools are visible but never invoked
-- `tool_search` aborts
-- namespace tools are rejected
-- `apply_patch` is returned in the wrong format
+The proxy runs locally, translates Codex-specific tool formats into provider-compatible function calls, and converts the responses back into the format Codex expects.
 
-`codex-ollama-proxy` runs locally and translates these request and response shapes between Codex and the configured model provider.
+> This project is unofficial and experimental. Codex tool formats may change between releases.
 
-This is unofficial and experimental. Codex internal tool formats can change, so the proxy may need updates as Codex changes.
-
-## Quick Start
+## Install
 
 ```bash
 npm install -g codex-ollama-proxy
+
 codex-ollama-proxy init
 codex-ollama-proxy install
 ```
 
-The proxy listens on `127.0.0.1:11436` and forwards to the configured upstream Responses API server. By default, the upstream is local Ollama at `http://127.0.0.1:11434/v1`.
+The local proxy listens on:
 
-To pin a specific release, install from the npm tarball:
-
-```bash
-npm install -g https://registry.npmjs.org/codex-ollama-proxy/-/codex-ollama-proxy-0.3.3.tgz
+```text
+http://127.0.0.1:11436
 ```
 
-## Use Codex Plugins With Ollama
+## Recommended Workflow: Provider Presets
 
-The default upstream is Ollama's local OpenAI-compatible Responses API:
+A preset saves your:
+
+* Provider endpoint
+* Text and image models
+* API key
+* Responses or Chat Completions adaptor
+* Routing and compatibility options
+
+Create each provider once, then start it by name:
 
 ```bash
-codex-ollama-proxy upstream --url "http://127.0.0.1:11434/v1"
-codex-ollama-proxy restart
+codex-ollama-proxy run PRESET_NAME
 ```
 
-The proxy flattens Codex namespace/plugin tools into model-callable functions, then maps the resulting calls back to the format Codex expects.
+## Ollama Preset
 
-## Use Codex Plugins With OpenRouter
-
-Point the upstream at a Responses-compatible OpenRouter endpoint and provide a bearer token:
+Ollama exposes a local Responses-compatible API at `http://127.0.0.1:11434/v1`.
 
 ```bash
-codex-ollama-proxy upstream --url "https://openrouter.ai/api/v1" --api-key "KEY"
-codex-ollama-proxy restart
+codex-ollama-proxy preset add ollama \
+  --url "http://127.0.0.1:11434/v1" \
+  --text-model "MODEL"
+
+codex-ollama-proxy run ollama
 ```
 
-The upstream must expose a compatible Responses API. Chat Completions-only APIs (`/v1/chat/completions`) need a separate adapter and are not supported by this setting alone.
-
-## Use A Chat Completions Provider
-
-For providers that expose `/v1/chat/completions` but not `/v1/responses`, keep
-using the normal upstream configuration and start the built-in completion API
-adaptor. Configure the chat-completion route after any `switch ollama` command,
-because `switch ollama` resets the route back to local Ollama defaults.
+Example:
 
 ```bash
-codex-ollama-proxy upstream --url "https://provider.example/v1" --api-key "KEY"
-codex-ollama-proxy route --text-model "MODEL" --image-model "MODEL" --auto-image
-codex-ollama-proxy serve --adaptor chat-completion
+codex-ollama-proxy preset add glm \
+  --url "http://127.0.0.1:11434/v1" \
+  --text-model "z-ai/glm-5.2"
+
+codex-ollama-proxy run glm
 ```
 
-The proxy starts a local adaptor and forwards Codex traffic through it. The
-provider URL and key come from the existing `upstream` config, so there is no
-separate API-key path for the adaptor.
-
-You can save provider routes as presets:
+GLM with Kimi auto-routing:
 
 ```bash
-codex-ollama-proxy preset add nvidia \
-  --adaptor chat-completion \
-  --url "https://integrate.api.nvidia.com/v1" \
-  --text-model "z-ai/glm-5.2" \
-  --image-model "thinkingmachines/inkling" \
+codex-ollama-proxy preset add glm-kimi \
+  --url "http://127.0.0.1:11434/v1" \
+  --text-model "glm-5.2:cloud" \
+  --image-model "kimi-k2.7-code:cloud" \
   --auto-image
 
-codex-ollama-proxy preset use nvidia --api-key "$NVIDIA_API_KEY"
+codex-ollama-proxy run glm-kimi
 ```
 
-To store the key in the preset as well, pass it when creating the preset:
+## OpenRouter Preset
+
+Export your OpenRouter key:
 
 ```bash
+export OPENROUTER_API_KEY="sk-or-..."
+```
+
+Create the preset:
+
+```bash
+codex-ollama-proxy preset add openrouter \
+  --url "https://openrouter.ai/api/v1" \
+  --text-model "PROVIDER/MODEL" \
+  --api-key "$OPENROUTER_API_KEY"
+```
+
+Run it whenever you want to use OpenRouter:
+
+```bash
+codex-ollama-proxy run openrouter
+```
+
+Example:
+
+```bash
+codex-ollama-proxy preset add openrouter-glm \
+  --url "https://openrouter.ai/api/v1" \
+  --text-model "z-ai/glm-5.2" \
+  --api-key "$OPENROUTER_API_KEY"
+
+codex-ollama-proxy run openrouter-glm
+```
+
+The selected OpenRouter model must support the required API and tool-calling behavior.
+
+## Custom Responses API Preset
+
+For any provider that exposes `POST /v1/responses`:
+
+```bash
+export PROVIDER_API_KEY="..."
+
+codex-ollama-proxy preset add custom-responses \
+  --url "https://provider.example/v1" \
+  --text-model "MODEL" \
+  --api-key "$PROVIDER_API_KEY"
+
+codex-ollama-proxy run custom-responses
+```
+
+## Chat Completions Provider Preset
+
+Some providers only expose:
+
+```text
+POST /v1/chat/completions
+```
+
+Use the built-in Chat Completions adaptor for these providers:
+
+```bash
+export PROVIDER_API_KEY="..."
+
+codex-ollama-proxy preset add custom-chat \
+  --adaptor chat-completion \
+  --url "https://provider.example/v1" \
+  --text-model "MODEL" \
+  --api-key "$PROVIDER_API_KEY"
+
+codex-ollama-proxy run custom-chat
+```
+
+The adaptor converts Codex Responses API traffic into Chat Completions requests.
+
+### NVIDIA Example
+
+```bash
+export NVIDIA_API_KEY="nvapi-..."
+
 codex-ollama-proxy preset add nvidia \
   --adaptor chat-completion \
   --url "https://integrate.api.nvidia.com/v1" \
@@ -98,14 +170,86 @@ codex-ollama-proxy preset add nvidia \
 codex-ollama-proxy run nvidia
 ```
 
-`preset use` and `run` start or restart the preset proxy stack in the
-background, wait briefly for the local proxy to respond, print the PID and log
-path, and return the terminal prompt. Use `run --foreground` when you want live
-server logs in the current terminal. Use `--no-start` with `preset use` only
-when you want to write config without starting the proxy.
+## Avoid Storing API Keys
 
-Image generation is configured separately from presets and applies to every
-route:
+To save the provider configuration without storing its key:
+
+```bash
+codex-ollama-proxy preset add openrouter \
+  --url "https://openrouter.ai/api/v1" \
+  --text-model "PROVIDER/MODEL"
+```
+
+Supply the key when activating the preset:
+
+```bash
+codex-ollama-proxy preset use openrouter \
+  --api-key "$OPENROUTER_API_KEY"
+```
+
+Use `run PRESET_NAME` when the preset already contains its API key.
+
+## Running Presets
+
+Start a preset in the background:
+
+```bash
+codex-ollama-proxy run openrouter
+```
+
+Show live logs in the current terminal:
+
+```bash
+codex-ollama-proxy run openrouter --foreground
+```
+
+Apply a preset without starting the proxy:
+
+```bash
+codex-ollama-proxy preset use openrouter --no-start
+```
+
+Both `run` and `preset use` configure the selected provider and start or restart the required local proxy processes unless `--no-start` is used.
+
+After changing providers, restart Codex or open a new Codex thread.
+
+## Text and Image Models
+
+A preset can use separate text and image models:
+
+```bash
+codex-ollama-proxy preset add multimodal \
+  --url "https://provider.example/v1" \
+  --text-model "TEXT_MODEL" \
+  --image-model "IMAGE_MODEL" \
+  --auto-image \
+  --api-key "$PROVIDER_API_KEY"
+```
+
+Run it normally:
+
+```bash
+codex-ollama-proxy run multimodal
+```
+
+With `--auto-image`, images in the current user turn or its tool outputs are routed to the image model.
+
+Use the same model for both when the provider has one multimodal model:
+
+```bash
+codex-ollama-proxy preset add multimodal \
+  --url "https://provider.example/v1" \
+  --text-model "MODEL" \
+  --image-model "MODEL" \
+  --auto-image \
+  --api-key "$PROVIDER_API_KEY"
+```
+
+## Image Generation
+
+Image generation is configured separately and applies across provider presets.
+
+### Gemini
 
 ```bash
 codex-ollama-proxy imagine \
@@ -115,155 +259,114 @@ codex-ollama-proxy imagine \
   --api-key "$GEMINI_API_KEY"
 ```
 
-This writes `~/.codex/ollama-shape-proxy/imagine.toml` and composes those
-settings into the live proxy route whenever you switch Ollama or use a preset.
-
-NVIDIA example:
+### OpenAI
 
 ```bash
-export NVIDIA_API_KEY="nvapi-..."
-
-codex-ollama-proxy switch ollama --model "z-ai/glm-5.2"
-
-codex-ollama-proxy upstream \
-  --url "https://integrate.api.nvidia.com/v1" \
-  --api-key "$NVIDIA_API_KEY"
-
-codex-ollama-proxy route \
-  --text-model "z-ai/glm-5.2" \
-  --image-model "thinkingmachines/inkling" \
-  --auto-image
-
-codex-ollama-proxy serve --adaptor chat-completion
+codex-ollama-proxy imagine \
+  --enable \
+  --service openai \
+  --model "gpt-image-2" \
+  --api-key "$OPENAI_API_KEY"
 ```
 
-## Configure Upstream Responses API
-
-Set or inspect the upstream Responses API server:
+### Ollama
 
 ```bash
-codex-ollama-proxy upstream --url "https://example.com/v1" --api-key "KEY"
-codex-ollama-proxy upstream --status
+codex-ollama-proxy imagine \
+  --enable \
+  --service ollama \
+  --model "x/z-image-turbo" \
+  --base-url "http://127.0.0.1:11434"
 ```
 
-Separate text and image models:
+Check the image-generation configuration:
 
 ```bash
-codex-ollama-proxy route --text-model "TEXT_MODEL" --image-model "IMAGE_MODEL" --auto-image
-codex-ollama-proxy switch ollama --model "TEXT_MODEL"
-```
-
-With automatic image routing enabled, images in the active user turn or its
-tool outputs use the image model. Images from earlier turns are ignored;
-disable automatic routing to preserve manual model selection.
-
-One model for both:
-
-```bash
-codex-ollama-proxy route --text-model "MODEL" --image-model "MODEL" --auto-image
-codex-ollama-proxy switch ollama --model "MODEL"
-```
-
-After switching, restart Codex or open a fresh thread.
-
-`switch ollama` starts or restarts the normal launchd-managed proxy
-automatically. Use `--no-start` only when you want to change Codex config
-without touching the running proxy.
-
-## Generate Images With Gemini, OpenAI, or Ollama
-
-Image generation uses the existing model-driven `generate_image` tool. The
-proxy does not classify prompt text or reroute ordinary chat requests.
-
-Use Ollama's native image endpoint while keeping any supported Responses API
-provider for text:
-
-```bash
-codex-ollama-proxy imagine --enable --service ollama \
-  --model "x/z-image-turbo" --base-url "http://127.0.0.1:11434"
 codex-ollama-proxy imagine --doctor
-codex-ollama-proxy restart
 ```
 
-Gemini and OpenAI remain available through the same tool:
+The proxy uses Codex's existing `generate_image` tool. It does not inspect ordinary prompts and automatically turn them into image requests.
+
+## Advanced Preset Options
+
+Presets can also save proxy compatibility options:
 
 ```bash
-codex-ollama-proxy imagine --enable --service gemini --model "GEMINI_IMAGE_MODEL" --api-key "KEY"
-codex-ollama-proxy imagine --enable --service openai --model "gpt-image-2" --api-key "KEY"
+codex-ollama-proxy preset add tuned \
+  --url "https://provider.example/v1" \
+  --text-model "MODEL" \
+  --dedupe-large-input \
+  --dedupe-min-chars 1024 \
+  --verbose-tools \
+  --enable-find-skill \
+  --no-stream-loop
 ```
 
-Ollama image generation uses its experimental `/api/generate` image support.
-The configured model determines whether reference-image editing is supported.
+Available preset toggles include:
 
-## Fix MCP Unsupported Call Errors In Codex
-
-Codex app plugins and MCP tools can arrive as namespace tools or dynamically loaded tools. Local/custom providers often cannot invoke those shapes directly. The proxy rewrites those tools into ordinary function tools for the model, then restores the calls for Codex.
-
-## Fix Codex Namespace Tool Compatibility
-
-Namespace tools are flattened into names that model providers can call. For example, a namespace tool can be exposed as a function-like tool and then split back into the namespace/name pair expected by Codex.
-
-## Fix tool_search With Custom Providers
-
-The proxy keeps Codex `tool_search` flows usable by preserving deferred tool discovery and mapping returned tool calls back into Codex-compatible shapes.
-
-Recent Codex/Desktop builds can expose `tool_search` as a native managed tool:
-
-```json
-{ "type": "tool_search", "execution": "client" }
+```text
+--auto-image / --no-auto-image
+--dedupe-large-input / --no-dedupe-large-input
+--dedupe-min-chars N
+--verbose-tools / --no-verbose-tools
+--log-upstream-body / --no-log-upstream-body
+--enable-find-skill / --no-enable-find-skill
+--stream-loop / --no-stream-loop
 ```
 
-Many custom providers do not treat that native item as callable. The proxy rewrites it into a normal function tool named `tool_search` for the model, then maps the model's `function_call` back into Codex's native `tool_search_call`.
+Runtime options such as `--foreground` remain on the `run` or `serve` command rather than being stored in the preset.
 
-If Codex omits the native `tool_search` item from a turn, the proxy still injects the same function shim so local/custom models can discover deferred tools consistently.
+## What the Proxy Fixes
 
-When `tool_search` returns deferred MCP/plugin namespace tools, the proxy also exposes those discovered tools as top-level callable functions on the follow-up model request. For example, a Storefront Builder tool returned by search as `mcp__storefront_builder.list_storefront_build_sessions` is made callable to the model as `mcp__storefront_builder__list_storefront_build_sessions`, then translated back to Codex as:
+Codex can send plugins and MCP tools using OpenAI-specific namespace, dynamic-tool, managed-tool, and freeform-tool formats.
 
-```json
-{
-  "type": "function_call",
-  "namespace": "mcp__storefront_builder",
-  "name": "list_storefront_build_sessions"
-}
+Many custom providers reject these formats or fail with problems such as:
+
+```text
+unsupported call
+MCP tools are visible but never invoked
+tool_search aborts
+namespace tools are rejected
+apply_patch uses the wrong format
 ```
 
-When `find_skill` is enabled, startup builds a filesystem-backed skill index immediately and refreshes it against Codex's exact enabled-skill inventory in the background. The first response and first skill lookup do not wait for the Codex app-server scan.
+The proxy translates these tools into ordinary provider-callable functions and restores the original Codex format when calls are returned.
 
-## How apply_patch Translation Works
+### Namespace and MCP Tools
 
-Codex may expose `apply_patch` as a custom/freeform tool. The proxy preserves the freeform custom tool behavior for Codex while making the surrounding tool list easier for local or custom Responses API providers to handle.
+A Codex tool such as:
+
+```text
+mcp__storefront_builder.list_storefront_build_sessions
+```
+
+can be exposed to the model as:
+
+```text
+mcp__storefront_builder__list_storefront_build_sessions
+```
+
+The returned call is translated back into the namespace and tool name expected by Codex.
+
+### `tool_search`
+
+When a provider cannot call Codex's native managed `tool_search` tool, the proxy exposes a regular function shim and maps the result back into a native `tool_search_call`.
+
+Deferred tools discovered by `tool_search` are also made callable on the following request.
+
+### `apply_patch`
+
+Codex may expose `apply_patch` as a custom or freeform tool. The proxy preserves the format Codex requires while making the surrounding tool list compatible with custom providers.
 
 ## Supported Providers
 
-- Ollama-compatible Responses API servers
-- OpenRouter or other custom providers that expose a compatible Responses API
-- Local shims that accept `POST /v1/responses`
+* Ollama-compatible Responses API servers
+* OpenRouter models with compatible API behavior
+* Custom providers exposing `POST /v1/responses`
+* Chat Completions providers through the built-in adaptor
+* Local Responses API shims
 
-The `generate_image` tool supports Gemini, OpenAI, and Ollama independently of
-the selected Responses API provider.
-
-Chat Completions-only providers are not supported by upstream URL configuration alone.
-
-## Known Limitations
-
-- This package is not affiliated with OpenAI.
-- Codex internal tool schemas can change.
-- Provider support depends on how closely the upstream matches the Responses API.
-- Web search falls back from Ollama cloud search, to local Ollama search, to DuckDuckGo HTML search.
-
-## Codex Skill
-
-Copy this skill link into Codex:
-
-```text
-https://raw.githubusercontent.com/bharat2808/codex-ollama-proxy/main/skills/codex-ollama-proxy/SKILL.md
-```
-
-Then ask:
-
-```text
-Install this skill and use it to set up codex-ollama-proxy.
-```
+Image generation can independently use Gemini, OpenAI, or Ollama.
 
 ## Useful Commands
 
@@ -272,7 +375,58 @@ codex-ollama-proxy status
 codex-ollama-proxy upstream --status
 codex-ollama-proxy logs --tail 100
 codex-ollama-proxy restart
+codex-ollama-proxy run PRESET_NAME
+codex-ollama-proxy run PRESET_NAME --foreground
 codex-ollama-proxy switch openai
+```
+
+## Codex Skill
+
+Give Codex this skill URL:
+
+```text
+https://raw.githubusercontent.com/bharat2808/codex-ollama-proxy/main/skills/codex-ollama-proxy/SKILL.md
+```
+
+Then ask Codex:
+
+```text
+Install this skill and use it to set up codex-ollama-proxy.
+```
+
+## Configuration Files
+
+Runtime configuration and logs are stored under:
+
+```text
+~/.codex/ollama-shape-proxy/proxy-models.toml
+~/.codex/ollama-shape-proxy/imagine.toml
+~/.codex/ollama-shape-proxy/proxy.log
+```
+
+Debug logging is disabled by default:
+
+```toml
+verbose_tools = false
+log_upstream_body = false
+```
+
+Be careful when enabling request-body logging because it may include prompts, tool arguments, or other sensitive data.
+
+## Known Limitations
+
+* This package is not affiliated with OpenAI.
+* Codex internal tool schemas may change.
+* Compatibility depends on the selected provider and model.
+* Models must support reliable tool calling for plugins and MCP tools to work well.
+* Some providers expose only Chat Completions and require the adaptor.
+* Web search falls back from Ollama cloud search, to local Ollama search, to DuckDuckGo HTML search.
+
+## Install a Specific Version
+
+```bash
+npm install -g \
+  https://registry.npmjs.org/codex-ollama-proxy/-/codex-ollama-proxy-0.3.3.tgz
 ```
 
 ## Uninstall
@@ -281,20 +435,4 @@ codex-ollama-proxy switch openai
 codex-ollama-proxy switch openai
 codex-ollama-proxy uninstall
 npm uninstall -g codex-ollama-proxy
-```
-
-## Files
-
-Runtime config and logs:
-
-```text
-~/.codex/ollama-shape-proxy/proxy-models.toml
-~/.codex/ollama-shape-proxy/proxy.log
-```
-
-Debug flags are off by default:
-
-```toml
-verbose_tools = false
-log_upstream_body = false
 ```

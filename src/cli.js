@@ -24,14 +24,17 @@ const PROXY_PORT = process.env.PROXY_PORT || '11436';
 function usage() {
   console.log(`Usage:
   codex-ollama-proxy init [--force]
-  codex-ollama-proxy serve [--adaptor chat-completion]
+  codex-ollama-proxy serve [--adaptor chat-completion] [--dedupe-large-input|--no-dedupe-large-input] [--dedupe-min-chars N]
   codex-ollama-proxy serve --preset NAME [--api-key KEY] [--replace]
   codex-ollama-proxy serve --adaptor chat-completion [--completion-model MODEL] [--adaptor-port PORT]
-  codex-ollama-proxy preset add NAME --adaptor chat-completion --url URL --text-model MODEL [--image-model MODEL] [--auto-image|--no-auto-image]
+  codex-ollama-proxy preset add NAME [--adaptor chat-completion|none] --url URL (--text-model MODEL | --model MODEL) [--image-model MODEL] [--api-key KEY]
+    [--auto-image|--no-auto-image] [--dedupe-large-input|--no-dedupe-large-input] [--dedupe-min-chars N]
+    [--verbose-tools|--no-verbose-tools] [--log-upstream-body|--no-log-upstream-body]
+    [--enable-find-skill|--no-enable-find-skill] [--stream-loop|--no-stream-loop]
   codex-ollama-proxy preset list
   codex-ollama-proxy preset show NAME
-  codex-ollama-proxy preset use NAME [--api-key KEY] [--no-start]
-  codex-ollama-proxy run NAME [--api-key KEY] [--adaptor-port PORT] [--replace] [--foreground]
+  codex-ollama-proxy preset use NAME [--api-key KEY] [--model MODEL] [--no-start]
+  codex-ollama-proxy run NAME [--api-key KEY] [--model MODEL] [--adaptor-port PORT] [--replace] [--foreground]
   codex-ollama-proxy status
   codex-ollama-proxy switch openai
   codex-ollama-proxy switch ollama [--model MODEL] [--no-start]
@@ -98,7 +101,7 @@ function parseFlags(argv) {
     const eq = arg.indexOf('=');
     const key = (eq >= 0 ? arg.slice(2, eq) : arg.slice(2)).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
     if (eq >= 0) flags[key] = arg.slice(eq + 1);
-    else if (['force', 'auto-image', 'no-auto-image', 'imagine-enable', 'imagine-disable', 'imagine-enhance', 'imagine-no-enhance', 'enable', 'disable', 'enhance', 'no-enhance', 'doctor', 'status', 'no-refresh', 'no-backup', 'no-start', 'replace', 'no-replace', 'foreground'].includes(arg.slice(2))) flags[key] = true;
+    else if (['force', 'auto-image', 'no-auto-image', 'dedupe-large-input', 'no-dedupe-large-input', 'verbose-tools', 'no-verbose-tools', 'log-upstream-body', 'no-log-upstream-body', 'enable-find-skill', 'no-enable-find-skill', 'stream-loop', 'no-stream-loop', 'imagine-enable', 'imagine-disable', 'imagine-enhance', 'imagine-no-enhance', 'enable', 'disable', 'enhance', 'no-enhance', 'doctor', 'status', 'no-refresh', 'no-backup', 'no-start', 'replace', 'no-replace', 'foreground'].includes(arg.slice(2))) flags[key] = true;
     else flags[key] = argv[++i];
   }
   return { flags, rest };
@@ -143,9 +146,14 @@ function readRouteValue(text, key, fallback = '') {
 }
 
 function writeRouteValue(text, key, value) {
-  const rendered = typeof value === 'boolean' ? String(value) : `"${value}"`;
-  const pattern = new RegExp(`^(\\s*${key}\\s*=\\s*)(?:\"[^\"]*\"|true|false).*`, 'm');
-  if (pattern.test(text)) return text.replace(pattern, `$1${rendered}`);
+  // Render booleans/numbers bare and strings quoted; match an existing
+  // quoted-string, boolean, or bare-number assignment so numeric config keys
+  // (e.g. duplicate_input_min_chars) are replaced in place rather than appended.
+  const rendered = typeof value === 'boolean' ? String(value)
+    : typeof value === 'number' ? String(value)
+    : `"${value}"`;
+  const pattern = new RegExp(`^(\\s*${key}\\s*=\\s*)(?:"[^"]*"|true|false|-?\\d+\\b).*`, 'm');
+  if (pattern.test(text)) return text.replace(pattern, (_match, prefix) => prefix + rendered);
   return `${text.replace(/\s+$/u, '')}\n${key} = ${rendered}\n`;
 }
 
@@ -164,24 +172,33 @@ function applyImagineConfigToRoute() {
 
 function applyPreset(name, flags = {}) {
   const preset = presets.readPreset(RUNTIME_DIR, name);
+  // A preset is a saved partial proxy-models.toml. Apply is authoritative for
+  // the keys it stores: switchMode resets the route to the template default,
+  // then every stored key is overlaid. Keys the preset does not specify keep
+  // the template default. --model/--api-key are run-only overrides layered on
+  // top (the stored preset file is not modified), mirroring `switch ollama
+  // --model`.
+  const values = Object.assign({}, preset.values);
+  const overrideModel = flags.model || '';
+  if (overrideModel) {
+    values.text_model = overrideModel;
+    values.image_model = overrideModel;
+  }
+  if (flags.apiKey === '') {
+    die('Error: --api-key was passed but empty. Check your shell variable with: echo ${NVIDIA_API_KEY:+set}');
+  }
+  const apiKey = flags.apiKey !== undefined ? flags.apiKey : values.upstream_api_key;
+  if (apiKey !== undefined) values.upstream_api_key = apiKey || '';
   switchMode('ollama', {
-    model: preset.text_model,
+    model: values.text_model,
     noRefresh: flags.noRefresh,
     noBackup: flags.noBackup,
     noStart: true,
   });
   let text = readRouteConfig();
-  text = writeRouteValue(text, 'upstream_url', preset.upstream_url);
-  const apiKey = flags.apiKey !== undefined ? flags.apiKey : preset.upstream_api_key;
-  if (flags.apiKey === '') {
-    die('Error: --api-key was passed but empty. Check your shell variable with: echo ${NVIDIA_API_KEY:+set}');
+  for (const def of presets.PRESET_KEY_DEFS) {
+    if (def.key in values) text = writeRouteValue(text, def.key, values[def.key]);
   }
-  if (apiKey !== undefined) {
-    text = writeRouteValue(text, 'upstream_api_key', apiKey || '');
-  }
-  text = writeRouteValue(text, 'text_model', preset.text_model);
-  text = writeRouteValue(text, 'image_model', preset.image_model);
-  text = writeRouteValue(text, 'auto_route_image', Boolean(preset.auto_route_image));
   text = writeRouteValue(text, 'active_preset', name);
   text = applyImagineConfigToText(text);
   fs.writeFileSync(ROUTE_CONFIG, text, 'utf8');
@@ -282,6 +299,13 @@ function switchMode(mode, flags) {
     bootoutLaunchAgent();
     stopListeningPort(proxyPort);
     install();
+    return waitForProxyResponse(proxyPort).then((probe) => {
+      console.log(`proxy=http://127.0.0.1:${proxyPort} status=${probe.statusCode || 'unreachable'}`);
+      if (probe.statusCode === 0) {
+        console.log(`logs=${path.join(RUNTIME_DIR, 'proxy.log')}`);
+      }
+      console.log('Restart Codex or open a fresh thread so provider discovery reloads.');
+    });
   }
   console.log('Restart Codex or open a fresh thread so provider discovery reloads.');
 }
@@ -425,7 +449,7 @@ function install() {
   init();
   fs.mkdirSync(path.dirname(PLIST), { recursive: true });
   fs.writeFileSync(PLIST, renderPlist(), 'utf8');
-  run('launchctl', ['bootout', `gui/${process.getuid()}/${LABEL}`], { check: false });
+  bootoutLaunchAgent();
   bootstrapLaunchAgent();
   run('launchctl', ['enable', `gui/${process.getuid()}/${LABEL}`], { check: false });
   run('launchctl', ['kickstart', '-k', `gui/${process.getuid()}/${LABEL}`], { check: false });
@@ -443,6 +467,13 @@ function logs(flags) {
 }
 
 async function serveCmd(flags = {}) {
+  // Runtime opt-in for the large-input dedupe filter. Default is off (see
+  // proxy.js) to avoid breaking provider implicit caching; these set the env
+  // vars the proxy reads at module load, so they must be set before the proxy
+  // is required below.
+  if (flags.dedupeLargeInput) process.env.PROXY_DEDUPE_LARGE_INPUT = '1';
+  if (flags.noDedupeLargeInput) process.env.PROXY_DEDUPE_LARGE_INPUT = '0';
+  if (flags.dedupeMinChars !== undefined) process.env.PROXY_DEDUPE_MIN_CHARS = String(flags.dedupeMinChars);
   if (flags.preset) {
     const preset = applyPreset(flags.preset, flags);
     flags = Object.assign({}, flags, { adaptor: preset.adaptor });
@@ -450,9 +481,11 @@ async function serveCmd(flags = {}) {
   if (!process.env.PROXY_PORT) process.env.PROXY_PORT = PROXY_PORT;
   const proxyPort = parseInt(process.env.PROXY_PORT || PROXY_PORT, 10);
   if (!await ensureProxyCanStart(flags, proxyPort)) return null;
-  if (!flags.adaptor) return require('./proxy').startServer();
+  // "none" (or no --adaptor) means a direct Responses-API upstream (local
+  // Ollama or a hosted Responses endpoint) — no adaptor process is started.
+  if (!flags.adaptor || flags.adaptor === 'none') return require('./proxy').startServer();
   if (flags.adaptor !== 'chat-completion') {
-    die('Error: --adaptor must be "chat-completion".');
+    die('Error: --adaptor must be "chat-completion" or "none".');
   }
 
   const routeConfig = readRouteConfig();
@@ -511,11 +544,18 @@ async function startPresetServer(preset, flags = {}) {
   const args = [
     path.join(PACKAGE_DIR, 'bin', 'codex-ollama-proxy'),
     'serve',
-    '--adaptor',
-    preset.adaptor,
   ];
+  // Direct presets (adaptor "none") talk straight to the configured
+  // upstream_url — no adaptor process. Only chat-completion spawns one.
+  if (preset.adaptor && preset.adaptor !== 'none') {
+    args.push('--adaptor', preset.adaptor);
+  }
   if (flags.adaptorPort) args.push('--adaptor-port', String(flags.adaptorPort));
   if (flags.completionModel) args.push('--completion-model', String(flags.completionModel));
+  // Forward the dedupe opt-in to the detached serve child.
+  if (flags.dedupeLargeInput) args.push('--dedupe-large-input');
+  if (flags.noDedupeLargeInput) args.push('--no-dedupe-large-input');
+  if (flags.dedupeMinChars !== undefined) args.push('--dedupe-min-chars', String(flags.dedupeMinChars));
 
   const child = spawn(process.execPath, args, {
     cwd: process.cwd(),
@@ -633,7 +673,7 @@ async function main() {
   if (command === 'preset') return presetCmd(subcommand, tail);
   if (command === 'run') return await runPreset(subcommand, parsed.flags);
   if (command === 'status') return status();
-  if (command === 'switch') return switchMode(subcommand, parsed.flags);
+  if (command === 'switch') return await switchMode(subcommand, parsed.flags);
   if (command === 'route') return route(parseFlags(process.argv.slice(2)).flags);
   if (command === 'upstream') return upstreamCmd(parseFlags(process.argv.slice(2)).flags);
   if (command === 'logs') return logs(parsed.flags);
