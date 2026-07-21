@@ -848,7 +848,7 @@ test('inline image persistence keeps active image-turn pixels and dereferences h
   });
 });
 
-test('inline image persistence dereferences history on a manually selected vision-model text turn', () => {
+test('inline image persistence is bypassed when image auto-routing is disabled', () => {
   withRouteConfig([
     'text_model = "text-model"',
     'image_model = "vision-model"',
@@ -877,8 +877,8 @@ test('inline image persistence dereferences history on a manually selected visio
     translateRequestBody(body);
 
     assert.equal(body.model, 'vision-model');
-    assert.equal(body.input[0].content[0].type, 'input_text');
-    assert.match(body.input[0].content[0].text, /^\[image saved: .+]$/);
+    assert.equal(body.input[0].content[0].type, 'input_image');
+    assert.equal(body.input[0].content[0].image_url, imageUrl);
   });
 });
 

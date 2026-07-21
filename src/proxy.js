@@ -542,7 +542,7 @@ function translateRequestBody(body) {
   if (Array.isArray(body.tools)) ingestNamespaces(body.tools);
   const activeImageTurn = activeTurnHasImage(body);
   applyModelRouting(body);
-  if (ROUTE_CFG.persist_inline_images) {
+  if (ROUTE_CFG.persist_inline_images && ROUTE_CFG.auto_route_image) {
     inlineImageCache.rewriteInlineImages(body, {
       cacheRoot: INLINE_IMAGE_CACHE_DIR,
       upstream: getUpstream(),

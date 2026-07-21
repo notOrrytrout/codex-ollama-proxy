@@ -36,12 +36,12 @@ auto_route_image = true
 dedupe_large_input = false
 duplicate_input_min_chars = 512
 
-# When true, supported inline images up to 20 MiB are saved below the proxy-owned
-# ~/.codex/attachments/ollama-shape-proxy-inline-images directory. Historical
-# images are replaced with path references, while active image-model turns keep
-# their current pixels. This applies only to loopback upstreams; remote upstreams
-# keep images inline and never receive local paths. Requests without a stable
-# session identifier are left unchanged to prevent cache sharing between sessions.
+# When true and auto_route_image is enabled, supported inline images up to 20 MiB
+# are saved below the proxy-owned ~/.codex/attachments/ollama-shape-proxy-inline-images
+# directory. Historical images are replaced with path references, while active
+# image-model turns keep their current pixels. This applies only to loopback
+# upstreams; remote upstreams keep images inline and never receive local paths.
+# Requests without a stable session identifier are left unchanged.
 persist_inline_images = true
 
 # Session caches unused for this many days are removed lazily. Set to 0 to keep
