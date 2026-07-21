@@ -27,6 +27,12 @@ upstream_api_key = ""
 # When false, the proxy passes model through unchanged (manual switching only).
 auto_route_image = true
 
+# Codex can replay identical developer instruction blocks multiple times in a
+# single Responses request. Keep the newest copy of byte-identical input_text
+# blocks at or above this size. User and assistant messages are never filtered.
+dedupe_large_input = true
+duplicate_input_min_chars = 512
+
 # When true, proxy.js logs full tool definitions and model/tool call items to
 # proxy.log. Useful for debugging Ollama shape translation. May include prompts,
 # tool arguments, shell commands, search queries, and patch contents.
