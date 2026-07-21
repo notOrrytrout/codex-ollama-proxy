@@ -67,6 +67,18 @@ codex-ollama-proxy preset add glm \
 codex-ollama-proxy run glm
 ```
 
+GLM with Kimi auto-routing:
+
+```bash
+codex-ollama-proxy preset add glm-kimi \
+  --url "http://127.0.0.1:11434/v1" \
+  --text-model "glm-5.2:cloud" \
+  --image-model "kimi-k2.7-code:cloud" \
+  --auto-image
+
+codex-ollama-proxy run glm-kimi
+```
+
 ## OpenRouter Preset
 
 Export your OpenRouter key:
