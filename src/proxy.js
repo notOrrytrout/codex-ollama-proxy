@@ -19,7 +19,12 @@ const UPSTREAM_BODY_LOG = path.join(RUNTIME_DIR, 'upstream-bodies.jsonl');
 // mid-turn can break provider implicit caching. Opt in via proxy-models.toml
 // (dedupe_large_input = true) or the CLI flag --dedupe-large-input / env
 // PROXY_DEDUPE_LARGE_INPUT=1 at proxy start.
-const ROUTE_CFG = { text_model: null, image_model: null, auto_route_image: false, dedupe_large_input: false, duplicate_input_min_chars: 512, verbose_tools: false, log_upstream_body: false, enable_find_skill: false, stream_proxy_loop: true, upstream_url: upstreamLib.DEFAULT_UPSTREAM_URL, upstream_api_key: "", imagine_enabled: false, imagine_service: "gemini", imagine_model: "", imagine_base_url: "", imagine_api_key: "", imagine_quality: "fast", imagine_enhance: false, imagine_aspect_ratio: "1:1" };
+// ROUTE_CFG is built from the shared route-config-schema so the preset layer
+// and the proxy share one source of truth for the toml keys (see
+// src/route-config-schema.js). Adding a config toggle only needs a new schema
+// entry + CLI flag; the preset layer picks it up automatically.
+const routeSchema = require('./route-config-schema');
+const ROUTE_CFG = { ...routeSchema.ALL_ROUTE_KEYS };
 function loadRouteConfig() {
   try {
     const raw = fs.readFileSync(PROXY_MODELS_PATH, 'utf8');

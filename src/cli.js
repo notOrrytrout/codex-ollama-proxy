@@ -27,7 +27,10 @@ function usage() {
   codex-ollama-proxy serve [--adaptor chat-completion] [--dedupe-large-input|--no-dedupe-large-input] [--dedupe-min-chars N]
   codex-ollama-proxy serve --preset NAME [--api-key KEY] [--replace]
   codex-ollama-proxy serve --adaptor chat-completion [--completion-model MODEL] [--adaptor-port PORT]
-  codex-ollama-proxy preset add NAME [--adaptor chat-completion|none] --url URL (--text-model MODEL | --model MODEL) [--image-model MODEL] [--api-key KEY] [--auto-image|--no-auto-image]
+  codex-ollama-proxy preset add NAME [--adaptor chat-completion|none] --url URL (--text-model MODEL | --model MODEL) [--image-model MODEL] [--api-key KEY]
+    [--auto-image|--no-auto-image] [--dedupe-large-input|--no-dedupe-large-input] [--dedupe-min-chars N]
+    [--verbose-tools|--no-verbose-tools] [--log-upstream-body|--no-log-upstream-body]
+    [--enable-find-skill|--no-enable-find-skill] [--stream-loop|--no-stream-loop]
   codex-ollama-proxy preset list
   codex-ollama-proxy preset show NAME
   codex-ollama-proxy preset use NAME [--api-key KEY] [--model MODEL] [--no-start]
@@ -98,7 +101,7 @@ function parseFlags(argv) {
     const eq = arg.indexOf('=');
     const key = (eq >= 0 ? arg.slice(2, eq) : arg.slice(2)).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
     if (eq >= 0) flags[key] = arg.slice(eq + 1);
-    else if (['force', 'auto-image', 'no-auto-image', 'dedupe-large-input', 'no-dedupe-large-input', 'imagine-enable', 'imagine-disable', 'imagine-enhance', 'imagine-no-enhance', 'enable', 'disable', 'enhance', 'no-enhance', 'doctor', 'status', 'no-refresh', 'no-backup', 'no-start', 'replace', 'no-replace', 'foreground'].includes(arg.slice(2))) flags[key] = true;
+    else if (['force', 'auto-image', 'no-auto-image', 'dedupe-large-input', 'no-dedupe-large-input', 'verbose-tools', 'no-verbose-tools', 'log-upstream-body', 'no-log-upstream-body', 'enable-find-skill', 'no-enable-find-skill', 'stream-loop', 'no-stream-loop', 'imagine-enable', 'imagine-disable', 'imagine-enhance', 'imagine-no-enhance', 'enable', 'disable', 'enhance', 'no-enhance', 'doctor', 'status', 'no-refresh', 'no-backup', 'no-start', 'replace', 'no-replace', 'foreground'].includes(arg.slice(2))) flags[key] = true;
     else flags[key] = argv[++i];
   }
   return { flags, rest };
@@ -143,8 +146,13 @@ function readRouteValue(text, key, fallback = '') {
 }
 
 function writeRouteValue(text, key, value) {
-  const rendered = typeof value === 'boolean' ? String(value) : `"${value}"`;
-  const pattern = new RegExp(`^(\\s*${key}\\s*=\\s*)(?:\"[^\"]*\"|true|false).*`, 'm');
+  // Render booleans/numbers bare and strings quoted; match an existing
+  // quoted-string, boolean, or bare-number assignment so numeric config keys
+  // (e.g. duplicate_input_min_chars) are replaced in place rather than appended.
+  const rendered = typeof value === 'boolean' ? String(value)
+    : typeof value === 'number' ? String(value)
+    : `"${value}"`;
+  const pattern = new RegExp(`^(\\s*${key}\\s*=\\s*)(?:"[^"]*"|true|false|-?\\d+\\b).*`, 'm');
   if (pattern.test(text)) return text.replace(pattern, `$1${rendered}`);
   return `${text.replace(/\s+$/u, '')}\n${key} = ${rendered}\n`;
 }
@@ -164,29 +172,33 @@ function applyImagineConfigToRoute() {
 
 function applyPreset(name, flags = {}) {
   const preset = presets.readPreset(RUNTIME_DIR, name);
-  // --model overrides the preset's text AND image model for this run only
-  // (the stored preset is not modified), mirroring `switch ollama --model`.
+  // A preset is a saved partial proxy-models.toml. Apply is authoritative for
+  // the keys it stores: switchMode resets the route to the template default,
+  // then every stored key is overlaid. Keys the preset does not specify keep
+  // the template default. --model/--api-key are run-only overrides layered on
+  // top (the stored preset file is not modified), mirroring `switch ollama
+  // --model`.
+  const values = Object.assign({}, preset.values);
   const overrideModel = flags.model || '';
-  const textModel = overrideModel || preset.text_model;
-  const imageModel = overrideModel || preset.image_model;
+  if (overrideModel) {
+    values.text_model = overrideModel;
+    values.image_model = overrideModel;
+  }
+  if (flags.apiKey === '') {
+    die('Error: --api-key was passed but empty. Check your shell variable with: echo ${NVIDIA_API_KEY:+set}');
+  }
+  const apiKey = flags.apiKey !== undefined ? flags.apiKey : values.upstream_api_key;
+  if (apiKey !== undefined) values.upstream_api_key = apiKey || '';
   switchMode('ollama', {
-    model: textModel,
+    model: values.text_model,
     noRefresh: flags.noRefresh,
     noBackup: flags.noBackup,
     noStart: true,
   });
   let text = readRouteConfig();
-  text = writeRouteValue(text, 'upstream_url', preset.upstream_url);
-  const apiKey = flags.apiKey !== undefined ? flags.apiKey : preset.upstream_api_key;
-  if (flags.apiKey === '') {
-    die('Error: --api-key was passed but empty. Check your shell variable with: echo ${NVIDIA_API_KEY:+set}');
+  for (const def of presets.PRESET_KEY_DEFS) {
+    if (def.key in values) text = writeRouteValue(text, def.key, values[def.key]);
   }
-  if (apiKey !== undefined) {
-    text = writeRouteValue(text, 'upstream_api_key', apiKey || '');
-  }
-  text = writeRouteValue(text, 'text_model', textModel);
-  text = writeRouteValue(text, 'image_model', imageModel);
-  text = writeRouteValue(text, 'auto_route_image', Boolean(preset.auto_route_image));
   text = writeRouteValue(text, 'active_preset', name);
   text = applyImagineConfigToText(text);
   fs.writeFileSync(ROUTE_CONFIG, text, 'utf8');
