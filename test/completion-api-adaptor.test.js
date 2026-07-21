@@ -380,6 +380,8 @@ test('CLI run PRESET applies preset and starts proxy plus chat-completion adapto
     '--foreground',
     '--adaptor-port',
     String(adaptorPort),
+    '--dedupe-min-chars',
+    '0',
   ], {
     cwd: path.join(__dirname, '..'),
     env: Object.assign({}, process.env, {
@@ -419,6 +421,7 @@ test('CLI run PRESET applies preset and starts proxy plus chat-completion adapto
 
   assert.match(stdout, /preset_applied=fake-provider/);
   assert.match(stdout, /completion-api-adaptor/);
+  assert.match(stderr, /duplicate_input_min_chars=0/);
   assert.doesNotMatch(stderr, /Error|EADDRINUSE|Unhandled/u);
 });
 
@@ -485,6 +488,8 @@ test('CLI run PRESET detaches after proxy starts', async () => {
       '--no-backup',
       '--adaptor-port',
       String(adaptorPort),
+      '--dedupe-min-chars',
+      '0',
     ], {
       cwd: path.join(__dirname, '..'),
       env: Object.assign({}, process.env, {
@@ -509,6 +514,8 @@ test('CLI run PRESET detaches after proxy starts', async () => {
     assert.equal(response.statusCode, 200);
     assert.equal(response.body.output_text, 'detached run ok');
     assert.equal(received[0].authorization, 'Bearer detached-secret');
+    const log = fs.readFileSync(path.join(codexHome, 'ollama-shape-proxy', 'proxy.log'), 'utf8');
+    assert.match(log, /duplicate_input_min_chars=0/);
   } finally {
     killListeningPort(proxyPort);
     killListeningPort(adaptorPort);

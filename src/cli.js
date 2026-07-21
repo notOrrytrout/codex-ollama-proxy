@@ -153,7 +153,7 @@ function writeRouteValue(text, key, value) {
     : typeof value === 'number' ? String(value)
     : `"${value}"`;
   const pattern = new RegExp(`^(\\s*${key}\\s*=\\s*)(?:"[^"]*"|true|false|-?\\d+\\b).*`, 'm');
-  if (pattern.test(text)) return text.replace(pattern, `$1${rendered}`);
+  if (pattern.test(text)) return text.replace(pattern, (_match, prefix) => prefix + rendered);
   return `${text.replace(/\s+$/u, '')}\n${key} = ${rendered}\n`;
 }
 
@@ -281,7 +281,7 @@ function codexConfig(args) {
   run(process.execPath, [path.join(PACKAGE_DIR, 'model_config.js'), ...args]);
 }
 
-async function switchMode(mode, flags) {
+function switchMode(mode, flags) {
   if (mode === 'openai') {
     codexConfig(['openai']);
     return;
@@ -299,11 +299,13 @@ async function switchMode(mode, flags) {
     bootoutLaunchAgent();
     stopListeningPort(proxyPort);
     install();
-    const probe = await waitForProxyResponse(proxyPort);
-    console.log(`proxy=http://127.0.0.1:${proxyPort} status=${probe.statusCode || 'unreachable'}`);
-    if (probe.statusCode === 0) {
-      console.log(`logs=${path.join(RUNTIME_DIR, 'proxy.log')}`);
-    }
+    return waitForProxyResponse(proxyPort).then((probe) => {
+      console.log(`proxy=http://127.0.0.1:${proxyPort} status=${probe.statusCode || 'unreachable'}`);
+      if (probe.statusCode === 0) {
+        console.log(`logs=${path.join(RUNTIME_DIR, 'proxy.log')}`);
+      }
+      console.log('Restart Codex or open a fresh thread so provider discovery reloads.');
+    });
   }
   console.log('Restart Codex or open a fresh thread so provider discovery reloads.');
 }
@@ -471,7 +473,7 @@ async function serveCmd(flags = {}) {
   // is required below.
   if (flags.dedupeLargeInput) process.env.PROXY_DEDUPE_LARGE_INPUT = '1';
   if (flags.noDedupeLargeInput) process.env.PROXY_DEDUPE_LARGE_INPUT = '0';
-  if (flags.dedupeMinChars) process.env.PROXY_DEDUPE_MIN_CHARS = String(flags.dedupeMinChars);
+  if (flags.dedupeMinChars !== undefined) process.env.PROXY_DEDUPE_MIN_CHARS = String(flags.dedupeMinChars);
   if (flags.preset) {
     const preset = applyPreset(flags.preset, flags);
     flags = Object.assign({}, flags, { adaptor: preset.adaptor });
@@ -553,7 +555,7 @@ async function startPresetServer(preset, flags = {}) {
   // Forward the dedupe opt-in to the detached serve child.
   if (flags.dedupeLargeInput) args.push('--dedupe-large-input');
   if (flags.noDedupeLargeInput) args.push('--no-dedupe-large-input');
-  if (flags.dedupeMinChars) args.push('--dedupe-min-chars', String(flags.dedupeMinChars));
+  if (flags.dedupeMinChars !== undefined) args.push('--dedupe-min-chars', String(flags.dedupeMinChars));
 
   const child = spawn(process.execPath, args, {
     cwd: process.cwd(),

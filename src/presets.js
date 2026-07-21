@@ -178,7 +178,7 @@ function flagsToValues(flags) {
   else if (flags.noDedupeLargeInput) values.dedupe_large_input = false;
   if (flags.dedupeMinChars !== undefined) {
     const n = Number(flags.dedupeMinChars);
-    if (!Number.isFinite(n) || n < 0) die('Error: --dedupe-min-chars must be a non-negative number.');
+    if (!Number.isInteger(n) || n < 0) die('Error: --dedupe-min-chars must be a non-negative integer.');
     values.duplicate_input_min_chars = n;
   }
 
