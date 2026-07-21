@@ -24,7 +24,7 @@ const PROXY_PORT = process.env.PROXY_PORT || '11436';
 function usage() {
   console.log(`Usage:
   codex-ollama-proxy init [--force]
-  codex-ollama-proxy serve [--adaptor chat-completion]
+  codex-ollama-proxy serve [--adaptor chat-completion] [--dedupe-large-input|--no-dedupe-large-input] [--dedupe-min-chars N]
   codex-ollama-proxy serve --preset NAME [--api-key KEY] [--replace]
   codex-ollama-proxy serve --adaptor chat-completion [--completion-model MODEL] [--adaptor-port PORT]
   codex-ollama-proxy preset add NAME [--adaptor chat-completion|none] --url URL (--text-model MODEL | --model MODEL) [--image-model MODEL] [--api-key KEY] [--auto-image|--no-auto-image]
@@ -98,7 +98,7 @@ function parseFlags(argv) {
     const eq = arg.indexOf('=');
     const key = (eq >= 0 ? arg.slice(2, eq) : arg.slice(2)).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
     if (eq >= 0) flags[key] = arg.slice(eq + 1);
-    else if (['force', 'auto-image', 'no-auto-image', 'imagine-enable', 'imagine-disable', 'imagine-enhance', 'imagine-no-enhance', 'enable', 'disable', 'enhance', 'no-enhance', 'doctor', 'status', 'no-refresh', 'no-backup', 'no-start', 'replace', 'no-replace', 'foreground'].includes(arg.slice(2))) flags[key] = true;
+    else if (['force', 'auto-image', 'no-auto-image', 'dedupe-large-input', 'no-dedupe-large-input', 'imagine-enable', 'imagine-disable', 'imagine-enhance', 'imagine-no-enhance', 'enable', 'disable', 'enhance', 'no-enhance', 'doctor', 'status', 'no-refresh', 'no-backup', 'no-start', 'replace', 'no-replace', 'foreground'].includes(arg.slice(2))) flags[key] = true;
     else flags[key] = argv[++i];
   }
   return { flags, rest };
@@ -453,6 +453,13 @@ function logs(flags) {
 }
 
 async function serveCmd(flags = {}) {
+  // Runtime opt-in for the large-input dedupe filter. Default is off (see
+  // proxy.js) to avoid breaking provider implicit caching; these set the env
+  // vars the proxy reads at module load, so they must be set before the proxy
+  // is required below.
+  if (flags.dedupeLargeInput) process.env.PROXY_DEDUPE_LARGE_INPUT = '1';
+  if (flags.noDedupeLargeInput) process.env.PROXY_DEDUPE_LARGE_INPUT = '0';
+  if (flags.dedupeMinChars) process.env.PROXY_DEDUPE_MIN_CHARS = String(flags.dedupeMinChars);
   if (flags.preset) {
     const preset = applyPreset(flags.preset, flags);
     flags = Object.assign({}, flags, { adaptor: preset.adaptor });
@@ -531,6 +538,10 @@ async function startPresetServer(preset, flags = {}) {
   }
   if (flags.adaptorPort) args.push('--adaptor-port', String(flags.adaptorPort));
   if (flags.completionModel) args.push('--completion-model', String(flags.completionModel));
+  // Forward the dedupe opt-in to the detached serve child.
+  if (flags.dedupeLargeInput) args.push('--dedupe-large-input');
+  if (flags.noDedupeLargeInput) args.push('--no-dedupe-large-input');
+  if (flags.dedupeMinChars) args.push('--dedupe-min-chars', String(flags.dedupeMinChars));
 
   const child = spawn(process.execPath, args, {
     cwd: process.cwd(),

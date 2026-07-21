@@ -15,7 +15,11 @@ const CODEX_DIR = process.env.CODEX_HOME || path.join(process.env.HOME, '.codex'
 const RUNTIME_DIR = path.join(CODEX_DIR, 'ollama-shape-proxy');
 const PROXY_MODELS_PATH = path.join(RUNTIME_DIR, 'proxy-models.toml');
 const UPSTREAM_BODY_LOG = path.join(RUNTIME_DIR, 'upstream-bodies.jsonl');
-const ROUTE_CFG = { text_model: null, image_model: null, auto_route_image: false, dedupe_large_input: true, duplicate_input_min_chars: 512, verbose_tools: false, log_upstream_body: false, enable_find_skill: false, stream_proxy_loop: true, upstream_url: upstreamLib.DEFAULT_UPSTREAM_URL, upstream_api_key: "", imagine_enabled: false, imagine_service: "gemini", imagine_model: "", imagine_base_url: "", imagine_api_key: "", imagine_quality: "fast", imagine_enhance: false, imagine_aspect_ratio: "1:1" };
+// dedupe_large_input defaults to false: stripping repeated developer context
+// mid-turn can break provider implicit caching. Opt in via proxy-models.toml
+// (dedupe_large_input = true) or the CLI flag --dedupe-large-input / env
+// PROXY_DEDUPE_LARGE_INPUT=1 at proxy start.
+const ROUTE_CFG = { text_model: null, image_model: null, auto_route_image: false, dedupe_large_input: false, duplicate_input_min_chars: 512, verbose_tools: false, log_upstream_body: false, enable_find_skill: false, stream_proxy_loop: true, upstream_url: upstreamLib.DEFAULT_UPSTREAM_URL, upstream_api_key: "", imagine_enabled: false, imagine_service: "gemini", imagine_model: "", imagine_base_url: "", imagine_api_key: "", imagine_quality: "fast", imagine_enhance: false, imagine_aspect_ratio: "1:1" };
 function loadRouteConfig() {
   try {
     const raw = fs.readFileSync(PROXY_MODELS_PATH, 'utf8');
@@ -34,6 +38,12 @@ function loadRouteConfig() {
   if (process.env.PROXY_FIND_SKILL === '0') ROUTE_CFG.enable_find_skill = false;
   if (process.env.PROXY_STREAM_LOOP === '1') ROUTE_CFG.stream_proxy_loop = true;
   if (process.env.PROXY_STREAM_LOOP === '0') ROUTE_CFG.stream_proxy_loop = false;
+  if (process.env.PROXY_DEDUPE_LARGE_INPUT === '1') ROUTE_CFG.dedupe_large_input = true;
+  if (process.env.PROXY_DEDUPE_LARGE_INPUT === '0') ROUTE_CFG.dedupe_large_input = false;
+  if (process.env.PROXY_DEDUPE_MIN_CHARS) {
+    const minChars = parseInt(process.env.PROXY_DEDUPE_MIN_CHARS, 10);
+    if (Number.isFinite(minChars) && minChars >= 0) ROUTE_CFG.duplicate_input_min_chars = minChars;
+  }
   log('route config: text=' + ROUTE_CFG.text_model + ' image=' + ROUTE_CFG.image_model + ' auto_route_image=' + ROUTE_CFG.auto_route_image + ' dedupe_large_input=' + ROUTE_CFG.dedupe_large_input + ' duplicate_input_min_chars=' + ROUTE_CFG.duplicate_input_min_chars + ' verbose_tools=' + ROUTE_CFG.verbose_tools + ' log_upstream_body=' + ROUTE_CFG.log_upstream_body + ' find_skill=' + ROUTE_CFG.enable_find_skill + ' stream_loop=' + ROUTE_CFG.stream_proxy_loop + ' upstream=' + upstreamLib.displayUrl(getUpstream()) + ' imagine=' + ROUTE_CFG.imagine_enabled + ' imagine_service=' + ROUTE_CFG.imagine_service);
 }
 

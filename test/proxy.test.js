@@ -397,6 +397,64 @@ test('request translation injects tool_search when Codex omits it', () => {
   );
 });
 
+function duplicateDeveloperBody(repeated) {
+  return {
+    model: 'test-model',
+    input: [
+      { type: 'message', id: 'd1', role: 'developer', content: [{ type: 'input_text', text: repeated }] },
+      { type: 'message', id: 'd2', role: 'developer', content: [{ type: 'input_text', text: repeated }] },
+    ],
+    tools: [],
+  };
+}
+
+function countRepeatedBlocks(body, repeated) {
+  let n = 0;
+  for (const item of body.input || []) {
+    if (Array.isArray(item && item.content)) {
+      for (const block of item.content) if (block && block.text === repeated) n += 1;
+    }
+  }
+  return n;
+}
+
+test('translateRequestBody does not dedupe large developer blocks by default (protects provider caching)', () => {
+  const repeated = '<skills_instructions>' + 'x'.repeat(600) + '</skills_instructions>';
+  const retained = withRouteConfig(['text_model = "test-model"'], ({ translateRequestBody }) => {
+    const body = duplicateDeveloperBody(repeated);
+    translateRequestBody(body);
+    return countRepeatedBlocks(body, repeated);
+  });
+  assert.equal(retained, 2, 'both copies retained when dedupe_large_input is not enabled');
+});
+
+test('translateRequestBody dedupes large developer blocks when enabled via route config', () => {
+  const repeated = '<skills_instructions>' + 'x'.repeat(600) + '</skills_instructions>';
+  const retained = withRouteConfig(['text_model = "test-model"', 'dedupe_large_input = true'], ({ translateRequestBody }) => {
+    const body = duplicateDeveloperBody(repeated);
+    translateRequestBody(body);
+    return countRepeatedBlocks(body, repeated);
+  });
+  assert.equal(retained, 1, 'newest copy retained when dedupe_large_input = true');
+});
+
+test('PROXY_DEDUPE_LARGE_INPUT=1 opts in to large-input dedupe at proxy start (CLI flag path)', () => {
+  const repeated = '<skills_instructions>' + 'x'.repeat(600) + '</skills_instructions>';
+  const previous = process.env.PROXY_DEDUPE_LARGE_INPUT;
+  process.env.PROXY_DEDUPE_LARGE_INPUT = '1';
+  try {
+    const retained = withRouteConfig(['text_model = "test-model"'], ({ translateRequestBody }) => {
+      const body = duplicateDeveloperBody(repeated);
+      translateRequestBody(body);
+      return countRepeatedBlocks(body, repeated);
+    });
+    assert.equal(retained, 1, 'env opt-in enables dedupe even without a toml key');
+  } finally {
+    if (previous === undefined) delete process.env.PROXY_DEDUPE_LARGE_INPUT;
+    else process.env.PROXY_DEDUPE_LARGE_INPUT = previous;
+  }
+});
+
 test('request translation removes duplicate function definitions', () => {
   const { translateRequestBody } = require('../src/proxy');
   const duplicate = {
