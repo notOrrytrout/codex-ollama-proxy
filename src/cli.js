@@ -29,6 +29,7 @@ function usage() {
   codex-ollama-proxy serve --adaptor chat-completion [--completion-model MODEL] [--adaptor-port PORT]
   codex-ollama-proxy preset add NAME [--adaptor chat-completion|none] --url URL (--text-model MODEL | --model MODEL) [--image-model MODEL] [--api-key KEY]
     [--auto-image|--no-auto-image] [--dedupe-large-input|--no-dedupe-large-input] [--dedupe-min-chars N]
+    [--persist-images|--no-persist-images] [--image-retention-days DAYS]
     [--verbose-tools|--no-verbose-tools] [--log-upstream-body|--no-log-upstream-body]
     [--enable-find-skill|--no-enable-find-skill] [--stream-loop|--no-stream-loop]
   codex-ollama-proxy preset list

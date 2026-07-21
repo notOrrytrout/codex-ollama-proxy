@@ -7,6 +7,14 @@ const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+test('inline image persistence is enabled by default in schema and packaged config', () => {
+  const schema = require('../src/route-config-schema');
+  const packaged = fs.readFileSync(path.join(__dirname, '..', 'config', 'proxy-models.default.toml'), 'utf8');
+
+  assert.equal(schema.ALL_ROUTE_KEYS.persist_inline_images, true);
+  assert.match(packaged, /^persist_inline_images\s*=\s*true$/m);
+});
+
 test('model_config ollama defaults to proxy route text_model', () => {
   const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-config-route-model-'));
   const runtimeDir = path.join(codexHome, 'ollama-shape-proxy');
@@ -116,6 +124,20 @@ test('CLI route configures inline image persistence and retention', () => {
     const route = fs.readFileSync(path.join(runtimeDir, 'proxy-models.toml'), 'utf8');
     assert.match(route, /^persist_inline_images\s*=\s*true$/m);
     assert.match(route, /^inline_image_retention_days\s*=\s*14$/m);
+
+    const disable = spawnSync(process.execPath, [
+      path.join(__dirname, '..', 'bin', 'codex-ollama-proxy'),
+      'route',
+      '--no-persist-images',
+    ], {
+      cwd: path.join(__dirname, '..'),
+      env: Object.assign({}, process.env, { CODEX_HOME: codexHome }),
+      encoding: 'utf8',
+    });
+
+    assert.equal(disable.status, 0, disable.stderr || disable.stdout);
+    const disabledRoute = fs.readFileSync(path.join(runtimeDir, 'proxy-models.toml'), 'utf8');
+    assert.match(disabledRoute, /^persist_inline_images\s*=\s*false$/m);
   } finally {
     fs.rmSync(codexHome, { recursive: true, force: true });
   }
@@ -457,6 +479,9 @@ test('CLI preset add stores any config toggle and preset use applies it (dynamic
       'https://provider.example.com/v1',
       '--text-model',
       't-model',
+      '--persist-images',
+      '--image-retention-days',
+      '14',
       '--dedupe-large-input',
       '--dedupe-min-chars',
       '1024',
@@ -474,6 +499,8 @@ test('CLI preset add stores any config toggle and preset use applies it (dynamic
     const presetPath = path.join(runtimeDir, 'presets', 'toggled.toml');
     const preset = fs.readFileSync(presetPath, 'utf8');
     assert.match(preset, /^adaptor\s*=\s*"none"$/m);
+    assert.match(preset, /^persist_inline_images\s*=\s*true$/m);
+    assert.match(preset, /^inline_image_retention_days\s*=\s*14$/m);
     assert.match(preset, /^dedupe_large_input\s*=\s*true$/m);
     assert.match(preset, /^duplicate_input_min_chars\s*=\s*1024$/m);
     assert.match(preset, /^verbose_tools\s*=\s*true$/m);
@@ -498,6 +525,8 @@ test('CLI preset add stores any config toggle and preset use applies it (dynamic
     assert.equal(use.status, 0, use.stderr || use.stdout);
     assert.match(use.stdout, /preset_applied=toggled/);
     const route = fs.readFileSync(path.join(runtimeDir, 'proxy-models.toml'), 'utf8');
+    assert.match(route, /^persist_inline_images\s*=\s*true$/m);
+    assert.match(route, /^inline_image_retention_days\s*=\s*14$/m);
     assert.match(route, /^dedupe_large_input\s*=\s*true$/m);
     assert.match(route, /^duplicate_input_min_chars\s*=\s*1024$/m);
     assert.match(route, /^verbose_tools\s*=\s*true$/m);

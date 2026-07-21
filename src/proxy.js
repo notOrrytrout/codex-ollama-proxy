@@ -16,7 +16,7 @@ const CODEX_DIR = process.env.CODEX_HOME || path.join(process.env.HOME, '.codex'
 const RUNTIME_DIR = path.join(CODEX_DIR, 'ollama-shape-proxy');
 const PROXY_MODELS_PATH = path.join(RUNTIME_DIR, 'proxy-models.toml');
 const UPSTREAM_BODY_LOG = path.join(RUNTIME_DIR, 'upstream-bodies.jsonl');
-const INLINE_IMAGE_CACHE_DIR = path.join(CODEX_DIR, 'attachments');
+const INLINE_IMAGE_CACHE_DIR = path.join(CODEX_DIR, 'attachments', 'ollama-shape-proxy-inline-images');
 // dedupe_large_input defaults to false: stripping repeated developer context
 // mid-turn can break provider implicit caching. Opt in via proxy-models.toml
 // (dedupe_large_input = true) or the CLI flag --dedupe-large-input / env
@@ -545,6 +545,7 @@ function translateRequestBody(body) {
   if (ROUTE_CFG.persist_inline_images) {
     inlineImageCache.rewriteInlineImages(body, {
       cacheRoot: INLINE_IMAGE_CACHE_DIR,
+      upstream: getUpstream(),
       // Pixel retention follows the active-turn decision, not the selected
       // model name. A manually selected vision model on a text-only turn must
       // not cause every historical inline image to be replayed.

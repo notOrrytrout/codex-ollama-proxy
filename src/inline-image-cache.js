@@ -11,6 +11,7 @@ const MIME_EXTENSIONS = new Map([
   ['image/webp', '.webp'],
 ]);
 const DEFAULT_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+const MAX_INLINE_IMAGE_BYTES = 20 * 1024 * 1024;
 
 let lastCleanupAt = 0;
 
@@ -18,7 +19,23 @@ function hash(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
-function parseInlineImage(block) {
+function hasImageSignature(mimeType, bytes) {
+  if (mimeType === 'image/gif') {
+    return bytes.length >= 6 && (bytes.subarray(0, 6).equals(Buffer.from('GIF87a')) || bytes.subarray(0, 6).equals(Buffer.from('GIF89a')));
+  }
+  if (mimeType === 'image/jpeg') {
+    return bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  }
+  if (mimeType === 'image/png') {
+    return bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  }
+  if (mimeType === 'image/webp') {
+    return bytes.length >= 12 && bytes.subarray(0, 4).equals(Buffer.from('RIFF')) && bytes.subarray(8, 12).equals(Buffer.from('WEBP'));
+  }
+  return false;
+}
+
+function parseInlineImage(block, options = {}) {
   if (!block || typeof block !== 'object') return null;
   const imageUrl = typeof block.image_url === 'string'
     ? block.image_url
@@ -28,15 +45,34 @@ function parseInlineImage(block) {
   if (!imageUrl) return null;
   const match = imageUrl.match(/^data:(image\/(?:gif|jpeg|png|webp));base64,([A-Za-z0-9+/=\s]+)$/i);
   if (!match) return null;
+  const maxBytes = Number.isFinite(options.maxBytes) && options.maxBytes >= 0
+    ? options.maxBytes
+    : MAX_INLINE_IMAGE_BYTES;
+  const maxEncodedChars = Math.ceil(maxBytes / 3) * 4;
+  if (match[2].length > maxEncodedChars) return null;
   const encoded = match[2].replace(/\s/g, '');
   if (!encoded) return null;
   const bytes = Buffer.from(encoded, 'base64');
   const normalized = encoded.replace(/=+$/, '');
-  if (!bytes.length || bytes.toString('base64').replace(/=+$/, '') !== normalized) return null;
+  const mimeType = match[1].toLowerCase();
+  if (!bytes.length || bytes.length > maxBytes || bytes.toString('base64').replace(/=+$/, '') !== normalized) return null;
+  if (!hasImageSignature(mimeType, bytes)) return null;
   return {
     bytes,
-    mimeType: match[1].toLowerCase(),
+    mimeType,
   };
+}
+
+function isLoopbackUpstream(upstream) {
+  const value = upstream && upstream.baseUrl ? upstream.baseUrl : upstream;
+  let url;
+  try {
+    url = value instanceof URL ? value : new URL(String(value || ''));
+  } catch {
+    return false;
+  }
+  const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  return hostname === 'localhost' || hostname === '::1' || /^127(?:\.\d{1,3}){3}$/.test(hostname);
 }
 
 function activeTurnStartIndex(body) {
@@ -55,8 +91,8 @@ function stableSessionSeed(body) {
     ['session_id', metadata.session_id],
     ['thread_id', metadata.thread_id],
     ['conversation_id', metadata.conversation_id],
-    ['prompt_cache_key', body && body.prompt_cache_key],
     ['conversation', conversation && typeof conversation === 'object' ? conversation.id : conversation],
+    ['prompt_cache_key', body && body.prompt_cache_key],
   ];
   for (const [kind, value] of candidates) {
     if (typeof value === 'string' && value.trim()) return kind + ':' + value;
@@ -110,6 +146,23 @@ function persistImage(sessionDir, image) {
     fs.writeFileSync(imagePath, image.bytes, { flag: 'wx', mode: 0o600 });
   } catch (error) {
     if (!error || error.code !== 'EEXIST') throw error;
+    const existing = fs.readFileSync(imagePath);
+    if (existing.equals(image.bytes)) {
+      fs.chmodSync(imagePath, 0o600);
+      return imagePath;
+    }
+    const temporaryPath = imagePath + '.' + process.pid + '.' + crypto.randomBytes(8).toString('hex') + '.tmp';
+    try {
+      fs.writeFileSync(temporaryPath, image.bytes, { flag: 'wx', mode: 0o600 });
+      fs.renameSync(temporaryPath, imagePath);
+      fs.chmodSync(imagePath, 0o600);
+    } finally {
+      try {
+        fs.unlinkSync(temporaryPath);
+      } catch (cleanupError) {
+        if (!cleanupError || cleanupError.code !== 'ENOENT') throw cleanupError;
+      }
+    }
   }
   return imagePath;
 }
@@ -123,6 +176,12 @@ function pathReference(block, imagePath) {
 
 function rewriteInlineImages(body, options = {}) {
   if (!body || !Array.isArray(body.input) || !options.cacheRoot) return body;
+  if (!isLoopbackUpstream(options.upstream)) {
+    if (typeof options.log === 'function') {
+      options.log('inline-image-cache: upstream is not loopback; leaving images inline');
+    }
+    return body;
+  }
   const sessionSeed = stableSessionSeed(body);
   if (!sessionSeed) {
     if (typeof options.log === 'function') {
@@ -164,8 +223,10 @@ function rewriteInlineImages(body, options = {}) {
 }
 
 module.exports = {
+  MAX_INLINE_IMAGE_BYTES,
   activeTurnStartIndex,
   cleanupExpiredSessions,
+  isLoopbackUpstream,
   parseInlineImage,
   rewriteInlineImages,
   stableSessionSeed,
