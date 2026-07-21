@@ -245,6 +245,18 @@ codex-ollama-proxy preset add multimodal \
   --api-key "$PROVIDER_API_KEY"
 ```
 
+Set `persist_inline_images = true` in `proxy-models.toml` to cache inline images
+under `~/.codex/attachments` and replace historical pixels with path references.
+Persistence requires a stable session, thread, conversation, or prompt-cache
+identifier; requests without one retain their inline images. Session caches
+unused for 30 days are removed lazily by default. Configure
+`inline_image_retention_days`, or set it to `0` to retain caches indefinitely.
+The same settings can be changed without editing TOML directly:
+
+```bash
+codex-ollama-proxy route --persist-images --image-retention-days 30
+```
+
 ## Image Generation
 
 Image generation is configured separately and applies across provider presets.

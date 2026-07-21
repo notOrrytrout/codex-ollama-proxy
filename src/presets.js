@@ -174,6 +174,14 @@ function flagsToValues(flags) {
   // only when their flag is passed, template-default otherwise).
   values.auto_route_image = Boolean(flags.autoImage) && !flags.noAutoImage;
 
+  if (flags.persistImages) values.persist_inline_images = true;
+  else if (flags.noPersistImages) values.persist_inline_images = false;
+  if (flags.imageRetentionDays !== undefined) {
+    const n = Number(flags.imageRetentionDays);
+    if (!Number.isInteger(n) || n < 0) die('Error: --image-retention-days must be a non-negative integer.');
+    values.inline_image_retention_days = n;
+  }
+
   if (flags.dedupeLargeInput) values.dedupe_large_input = true;
   else if (flags.noDedupeLargeInput) values.dedupe_large_input = false;
   if (flags.dedupeMinChars !== undefined) {
