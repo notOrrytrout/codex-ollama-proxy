@@ -1671,6 +1671,90 @@ const server = http.createServer((clientReq, clientRes) => {
   clientReq.on('error', (e) => log('client error: ' + e.message));
 });
 
+// Best-effort startup check that the configured text_model / image_model
+// resolve in the local Ollama registry. Only runs when the upstream is the
+// local Ollama daemon (host is 127.0.0.1/localhost AND the OpenAI mount path
+// is /v1, the standard Ollama topology). Remote Responses-API upstreams, the
+// chat-completion adaptor, and test fakes (which mount at /custom) are
+// skipped. Detection is two-step: probe /api/tags first (Ollama-only endpoint
+// that returns {models:[...]}); only if it looks like Ollama do we /api/show
+// each configured slug. A missing slug — a typo like "kimi-k2.7:cloud" vs the
+// real "kimi-k2.7-code:cloud", or a model that was never pulled — logs a clear
+// warning at startup instead of failing on the first request with a 404.
+// Non-fatal: Ollama may start after the proxy, and the proxy still serves; the
+// per-request path already handles upstream errors.
+async function verifyConfiguredModels() {
+  const slugs = [ROUTE_CFG.text_model, ROUTE_CFG.image_model].filter(Boolean);
+  if (!slugs.length) return;
+  const upstream = getUpstream();
+  const base = upstream && upstream.baseUrl ? upstream.baseUrl : null;
+  const host = base ? base.hostname : '';
+  // Only the standard local Ollama topology: local host + /v1 mount. This
+  // skips remote upstreams, the chat-completion adaptor, and test fakes
+  // (which mount at /custom), none of which expose Ollama's /api/* surface.
+  if (host !== '127.0.0.1' && host !== 'localhost') {
+    return;
+  }
+  if (base.pathname !== '/v1') {
+    debugLog('model check: skipped (upstream path "' + base.pathname + '" is not the Ollama /v1 mount)');
+    return;
+  }
+  // /api/* lives at the Ollama root, not under /v1.
+  const root = new URL(base.href);
+  root.pathname = '/';
+  const tagsUrl = new URL('api/tags', root).href;
+  const showUrl = new URL('api/show', root).href;
+  // Step 1: confirm this is actually Ollama. /api/tags returning a models
+  // array is the Ollama signature; other local servers (e.g. the completion
+  // adaptor) 404 here, so we skip silently instead of false-warning.
+  let tags;
+  try {
+    const tagsRes = await fetch(tagsUrl, { method: 'GET', signal: AbortSignal.timeout(5000) });
+    tags = await tagsRes.json().catch(() => null);
+  } catch (e) {
+    debugLog('model check: skipped (Ollama /api/tags unreachable: ' + e.message + ')');
+    return;
+  }
+  if (!tags || !Array.isArray(tags.models)) {
+    debugLog('model check: skipped (upstream did not respond like Ollama /api/tags)');
+    return;
+  }
+  const installed = new Set();
+  for (const m of tags.models) {
+    if (m && (m.name || m.model)) installed.add(m.name || m.model);
+  }
+  log('model check: verifying ' + slugs.length + ' configured slug(s) against ' + showUrl + ' (' + installed.size + ' installed)');
+  for (const slug of slugs) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    try {
+      const res = await fetch(showUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: slug }),
+        signal: controller.signal,
+      });
+      const data = await res.json().catch(() => null);
+      if (data && (data.details || data.capabilities)) {
+        log('model check: "' + slug + '" OK (resolved in Ollama registry' + (installed.has(slug) ? '' : '; remote/cloud') + ')');
+        continue;
+      }
+      if (data && typeof data.error === 'string') {
+        log('model check: WARNING model "' + slug + '" not found in Ollama registry — ' + data.error);
+        log('  check proxy-models.toml text_model/image_model; if the slug is correct run: ollama pull ' + slug);
+        continue;
+      }
+      // Unexpected shape (not Ollama): skip silently.
+      debugLog('model check: skipped "' + slug + '" (unexpected /api/show response shape)');
+    } catch (e) {
+      // Ollama not up yet / network: skip — per-request path handles it.
+      debugLog('model check: skipped "' + slug + '": ' + e.message);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+
 function startServer(port = LISTEN_PORT) {
   server.once('error', (error) => {
     if (error && error.code === 'EADDRINUSE') {
@@ -1683,6 +1767,9 @@ function startServer(port = LISTEN_PORT) {
   });
   server.listen(port, '127.0.0.1', () => {
     log('listening on 127.0.0.1:' + port + ' -> ' + upstreamLib.displayUrl(getUpstream()));
+    verifyConfiguredModels().catch((error) => {
+      debugLog('model availability check failed: ' + error.message);
+    });
     if (ROUTE_CFG.enable_find_skill) {
       skillFind.prewarmSkillIndex(debugLog).catch((error) => {
         debugLog('find_skill background prewarm failed: ' + error.message);

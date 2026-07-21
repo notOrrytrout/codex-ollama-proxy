@@ -345,6 +345,70 @@ test('CLI preset add rejects an explicitly empty API key', () => {
   }
 });
 
+test('CLI preset add --model sets both text and image model, and preset use --model overrides both for the run', () => {
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-cli-preset-model-shorthand-'));
+  const runtimeDir = path.join(codexHome, 'ollama-shape-proxy');
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, 'config.toml'), 'sandbox_mode = "danger-full-access"\n', 'utf8');
+
+  try {
+    // --model (no --text-model) is the shorthand for "default model for both".
+    const add = spawnSync(process.execPath, [
+      path.join(__dirname, '..', 'bin', 'codex-ollama-proxy'),
+      'preset',
+      'add',
+      'single',
+      '--url',
+      'https://provider.example.com/v1',
+      '--model',
+      'single-model',
+    ], {
+      cwd: path.join(__dirname, '..'),
+      env: Object.assign({}, process.env, { CODEX_HOME: codexHome }),
+      encoding: 'utf8',
+    });
+    assert.equal(add.status, 0, add.stderr || add.stdout);
+
+    const presetPath = path.join(runtimeDir, 'presets', 'single.toml');
+    const preset = fs.readFileSync(presetPath, 'utf8');
+    assert.match(preset, /^adaptor\s*=\s*"none"$/m);
+    assert.match(preset, /^text_model\s*=\s*"single-model"$/m);
+    assert.match(preset, /^image_model\s*=\s*"single-model"$/m);
+
+    // --model at use time overrides both text and image for this run only,
+    // without modifying the stored preset.
+    const use = spawnSync(process.execPath, [
+      path.join(__dirname, '..', 'bin', 'codex-ollama-proxy'),
+      'preset',
+      'use',
+      'single',
+      '--model',
+      'override-model',
+      '--no-refresh',
+      '--no-backup',
+      '--no-start',
+    ], {
+      cwd: path.join(__dirname, '..'),
+      env: Object.assign({}, process.env, { CODEX_HOME: codexHome }),
+      encoding: 'utf8',
+    });
+    assert.equal(use.status, 0, use.stderr || use.stdout);
+    assert.match(use.stdout, /preset_applied=single/);
+
+    const route = fs.readFileSync(path.join(runtimeDir, 'proxy-models.toml'), 'utf8');
+    assert.match(route, /^text_model\s*=\s*"override-model"$/m);
+    assert.match(route, /^image_model\s*=\s*"override-model"$/m);
+    assert.match(route, /^upstream_url\s*=\s*"https:\/\/provider\.example\.com\/v1"$/m);
+
+    // The stored preset is unchanged.
+    const presetAfter = fs.readFileSync(presetPath, 'utf8');
+    assert.match(presetAfter, /^text_model\s*=\s*"single-model"$/m);
+    assert.match(presetAfter, /^image_model\s*=\s*"single-model"$/m);
+  } finally {
+    fs.rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
 test('local Ollama capability discovery uses bounded show requests and preserves lookup failures as unknown', async () => {
   const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-config-capabilities-'));
   const previousCodexHome = process.env.CODEX_HOME;

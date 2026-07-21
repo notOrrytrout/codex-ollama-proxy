@@ -30,7 +30,7 @@ auto_route_image = true
 # Codex can replay identical developer instruction blocks multiple times in a
 # single Responses request. Keep the newest copy of byte-identical input_text
 # blocks at or above this size. User and assistant messages are never filtered.
-dedupe_large_input = true
+dedupe_large_input = false
 duplicate_input_min_chars = 512
 
 # When true, proxy.js logs full tool definitions and model/tool call items to

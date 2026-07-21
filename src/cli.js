@@ -27,11 +27,11 @@ function usage() {
   codex-ollama-proxy serve [--adaptor chat-completion]
   codex-ollama-proxy serve --preset NAME [--api-key KEY] [--replace]
   codex-ollama-proxy serve --adaptor chat-completion [--completion-model MODEL] [--adaptor-port PORT]
-  codex-ollama-proxy preset add NAME --adaptor chat-completion --url URL --text-model MODEL [--image-model MODEL] [--auto-image|--no-auto-image]
+  codex-ollama-proxy preset add NAME [--adaptor chat-completion|none] --url URL (--text-model MODEL | --model MODEL) [--image-model MODEL] [--api-key KEY] [--auto-image|--no-auto-image]
   codex-ollama-proxy preset list
   codex-ollama-proxy preset show NAME
-  codex-ollama-proxy preset use NAME [--api-key KEY] [--no-start]
-  codex-ollama-proxy run NAME [--api-key KEY] [--adaptor-port PORT] [--replace] [--foreground]
+  codex-ollama-proxy preset use NAME [--api-key KEY] [--model MODEL] [--no-start]
+  codex-ollama-proxy run NAME [--api-key KEY] [--model MODEL] [--adaptor-port PORT] [--replace] [--foreground]
   codex-ollama-proxy status
   codex-ollama-proxy switch openai
   codex-ollama-proxy switch ollama [--model MODEL] [--no-start]
@@ -164,8 +164,13 @@ function applyImagineConfigToRoute() {
 
 function applyPreset(name, flags = {}) {
   const preset = presets.readPreset(RUNTIME_DIR, name);
+  // --model overrides the preset's text AND image model for this run only
+  // (the stored preset is not modified), mirroring `switch ollama --model`.
+  const overrideModel = flags.model || '';
+  const textModel = overrideModel || preset.text_model;
+  const imageModel = overrideModel || preset.image_model;
   switchMode('ollama', {
-    model: preset.text_model,
+    model: textModel,
     noRefresh: flags.noRefresh,
     noBackup: flags.noBackup,
     noStart: true,
@@ -179,8 +184,8 @@ function applyPreset(name, flags = {}) {
   if (apiKey !== undefined) {
     text = writeRouteValue(text, 'upstream_api_key', apiKey || '');
   }
-  text = writeRouteValue(text, 'text_model', preset.text_model);
-  text = writeRouteValue(text, 'image_model', preset.image_model);
+  text = writeRouteValue(text, 'text_model', textModel);
+  text = writeRouteValue(text, 'image_model', imageModel);
   text = writeRouteValue(text, 'auto_route_image', Boolean(preset.auto_route_image));
   text = writeRouteValue(text, 'active_preset', name);
   text = applyImagineConfigToText(text);
@@ -264,7 +269,7 @@ function codexConfig(args) {
   run(process.execPath, [path.join(PACKAGE_DIR, 'model_config.js'), ...args]);
 }
 
-function switchMode(mode, flags) {
+async function switchMode(mode, flags) {
   if (mode === 'openai') {
     codexConfig(['openai']);
     return;
@@ -282,6 +287,11 @@ function switchMode(mode, flags) {
     bootoutLaunchAgent();
     stopListeningPort(proxyPort);
     install();
+    const probe = await waitForProxyResponse(proxyPort);
+    console.log(`proxy=http://127.0.0.1:${proxyPort} status=${probe.statusCode || 'unreachable'}`);
+    if (probe.statusCode === 0) {
+      console.log(`logs=${path.join(RUNTIME_DIR, 'proxy.log')}`);
+    }
   }
   console.log('Restart Codex or open a fresh thread so provider discovery reloads.');
 }
@@ -425,7 +435,7 @@ function install() {
   init();
   fs.mkdirSync(path.dirname(PLIST), { recursive: true });
   fs.writeFileSync(PLIST, renderPlist(), 'utf8');
-  run('launchctl', ['bootout', `gui/${process.getuid()}/${LABEL}`], { check: false });
+  bootoutLaunchAgent();
   bootstrapLaunchAgent();
   run('launchctl', ['enable', `gui/${process.getuid()}/${LABEL}`], { check: false });
   run('launchctl', ['kickstart', '-k', `gui/${process.getuid()}/${LABEL}`], { check: false });
@@ -450,9 +460,11 @@ async function serveCmd(flags = {}) {
   if (!process.env.PROXY_PORT) process.env.PROXY_PORT = PROXY_PORT;
   const proxyPort = parseInt(process.env.PROXY_PORT || PROXY_PORT, 10);
   if (!await ensureProxyCanStart(flags, proxyPort)) return null;
-  if (!flags.adaptor) return require('./proxy').startServer();
+  // "none" (or no --adaptor) means a direct Responses-API upstream (local
+  // Ollama or a hosted Responses endpoint) — no adaptor process is started.
+  if (!flags.adaptor || flags.adaptor === 'none') return require('./proxy').startServer();
   if (flags.adaptor !== 'chat-completion') {
-    die('Error: --adaptor must be "chat-completion".');
+    die('Error: --adaptor must be "chat-completion" or "none".');
   }
 
   const routeConfig = readRouteConfig();
@@ -511,9 +523,12 @@ async function startPresetServer(preset, flags = {}) {
   const args = [
     path.join(PACKAGE_DIR, 'bin', 'codex-ollama-proxy'),
     'serve',
-    '--adaptor',
-    preset.adaptor,
   ];
+  // Direct presets (adaptor "none") talk straight to the configured
+  // upstream_url — no adaptor process. Only chat-completion spawns one.
+  if (preset.adaptor && preset.adaptor !== 'none') {
+    args.push('--adaptor', preset.adaptor);
+  }
   if (flags.adaptorPort) args.push('--adaptor-port', String(flags.adaptorPort));
   if (flags.completionModel) args.push('--completion-model', String(flags.completionModel));
 
@@ -633,7 +648,7 @@ async function main() {
   if (command === 'preset') return presetCmd(subcommand, tail);
   if (command === 'run') return await runPreset(subcommand, parsed.flags);
   if (command === 'status') return status();
-  if (command === 'switch') return switchMode(subcommand, parsed.flags);
+  if (command === 'switch') return await switchMode(subcommand, parsed.flags);
   if (command === 'route') return route(parseFlags(process.argv.slice(2)).flags);
   if (command === 'upstream') return upstreamCmd(parseFlags(process.argv.slice(2)).flags);
   if (command === 'logs') return logs(parsed.flags);

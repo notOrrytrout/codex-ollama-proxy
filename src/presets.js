@@ -70,13 +70,17 @@ function normalizePreset(name, text) {
     image_model: readTomlString(text, 'image_model'),
     auto_route_image: readTomlBool(text, 'auto_route_image', false),
   };
-  if (!preset.adaptor || !preset.upstream_url || !preset.text_model) {
-    die(`Error: preset ${name} is missing adaptor, upstream_url, or text_model.`);
+  // adaptor defaults to "none" (direct Responses API) when omitted, so a
+ // preset can target local Ollama or a hosted Responses endpoint without the
+ // chat-completion adaptor. Only "none" and "chat-completion" are accepted.
+  if (!preset.adaptor) preset.adaptor = 'none';
+  if (preset.adaptor !== 'none' && preset.adaptor !== 'chat-completion') {
+    die(`Error: preset ${name} uses unsupported adaptor "${preset.adaptor}". Supported: "chat-completion" (Chat Completions provider via the adaptor) or "none" (direct Responses API, e.g. local Ollama or a hosted Responses endpoint).`);
+  }
+  if (!preset.upstream_url || !preset.text_model) {
+    die(`Error: preset ${name} is missing upstream_url or text_model.`);
   }
   if (!preset.image_model) preset.image_model = preset.text_model;
-  if (preset.adaptor !== 'chat-completion') {
-    die(`Error: preset ${name} uses unsupported adaptor "${preset.adaptor}".`);
-  }
   return preset;
 }
 
@@ -88,10 +92,14 @@ function readPreset(runtimeDir, name) {
 
 function addPreset(runtimeDir, name, flags, log = console.log) {
   validatePresetName(name);
-  if (!flags.adaptor) die('Error: preset add requires --adaptor chat-completion.');
-  if (flags.adaptor !== 'chat-completion') die('Error: --adaptor must be "chat-completion".');
+  const adaptor = flags.adaptor || 'none';
+  if (adaptor !== 'none' && adaptor !== 'chat-completion') die('Error: --adaptor must be "chat-completion" or "none".');
   if (!flags.url) die('Error: preset add requires --url URL.');
-  if (!flags.textModel) die('Error: preset add requires --text-model MODEL.');
+  // --model is a shorthand that sets both text_model and image_model (mirrors
+  // `switch ollama --model`). --text-model/--image-model override it per-field.
+  const textModel = flags.textModel || flags.model;
+  const imageModel = flags.imageModel || textModel;
+  if (!textModel) die('Error: preset add requires --text-model MODEL (or --model MODEL to set both).');
   if (flags.apiKey === '') {
     die('Error: --api-key was passed but empty. Check your shell variable with: echo ${NVIDIA_API_KEY:+set}');
   }
@@ -104,11 +112,11 @@ function addPreset(runtimeDir, name, flags, log = console.log) {
 
   fs.mkdirSync(presetsDir(runtimeDir), { recursive: true });
   const preset = {
-    adaptor: flags.adaptor,
+    adaptor: flags.adaptor || 'none',
     upstream_url: flags.url,
     ...(flags.apiKey !== undefined ? { upstream_api_key: flags.apiKey || '' } : {}),
-    text_model: flags.textModel,
-    image_model: flags.imageModel || flags.textModel,
+    text_model: textModel,
+    image_model: imageModel,
     auto_route_image: Boolean(flags.autoImage) && !flags.noAutoImage,
   };
   const file = presetPath(runtimeDir, name);
