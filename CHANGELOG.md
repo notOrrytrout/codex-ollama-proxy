@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
+
+Launcher state persistence, session-based inline image caching, schema-driven presets, stable streaming lifecycles, Ollama image generation, and faster nonblocking skill discovery.
 
 - Preserved launcher settings across `install` and `restart` with a private, non-secret runtime state file, including preset-free Chat Completions starts, custom proxy and adaptor ports, explicit completion-model overrides, and run-only dedupe overrides, while keeping post-preset `proxy-models.toml` route overrides intact. `status` also follows the saved custom proxy port.
 - Fixed `codex-ollama-proxy restart` to replace detached proxy listeners after verifying their process commands, while refusing to terminate unrelated or unverifiable processes that own the configured port.
