@@ -22,7 +22,7 @@ const MODEL_CATALOG = path.join(CODEX_DIR, 'ollama-launch-models-ollama-working.
 const MODEL_CATALOG_COPY = path.join(CODEX_DIR, 'ollama-launch-models.json');
 const PLIST = path.join(process.env.HOME, 'Library', 'LaunchAgents', 'com.user.codex-ollama-shape-proxy.plist');
 const LABEL = 'com.user.codex-ollama-shape-proxy';
-const PROXY_PORT = process.env.PROXY_PORT || '11436';
+const PROXY_PORT = process.env.PROXY_PORT || String(launcherState.DEFAULT_PROXY_PORT);
 
 function usage() {
   console.log(`Usage:
@@ -71,6 +71,30 @@ function run(command, args, options = {}) {
 
 function sleepMs(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function parseProxyPort(value) {
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error('PROXY_PORT must be an integer from 1 to 65535');
+  }
+  return port;
+}
+
+function configuredProxyPort() {
+  if (process.env.PROXY_PORT !== undefined) return parseProxyPort(process.env.PROXY_PORT);
+  const state = launcherState.read(LAUNCHER_STATE);
+  return state ? state.proxy_port : launcherState.DEFAULT_PROXY_PORT;
+}
+
+function launcherRuntimeOverrides(proxyPort) {
+  const overrides = { proxy_port: parseProxyPort(proxyPort) };
+  if (process.env.PROXY_DEDUPE_LARGE_INPUT === '1') overrides.dedupe_large_input = true;
+  if (process.env.PROXY_DEDUPE_LARGE_INPUT === '0') overrides.dedupe_large_input = false;
+  if (process.env.PROXY_DEDUPE_MIN_CHARS !== undefined) {
+    overrides.dedupe_min_chars = process.env.PROXY_DEDUPE_MIN_CHARS;
+  }
+  return overrides;
 }
 
 function bootstrapLaunchAgent() {
@@ -207,7 +231,9 @@ function applyPreset(name, flags = {}) {
   text = writeRouteValue(text, 'active_preset', name);
   text = applyImagineConfigToText(text);
   fs.writeFileSync(ROUTE_CONFIG, text, 'utf8');
-  launcherState.write(LAUNCHER_STATE, launcherState.fromPreset(preset));
+  launcherState.write(LAUNCHER_STATE, launcherState.fromPreset(preset, {
+    proxy_port: configuredProxyPort(),
+  }));
   console.log(`preset_applied=${name}`);
   console.log(`updated=${ROUTE_CONFIG}`);
   console.log(`adaptor=${preset.adaptor}`);
@@ -310,8 +336,12 @@ function switchMode(mode, flags) {
   if (flags.noBackup) args.push('--no-backup');
   codexConfig(args);
   if (!flags.noStart) {
-    const proxyPort = parseInt(process.env.PROXY_PORT || PROXY_PORT, 10);
-    launcherState.write(LAUNCHER_STATE, { version: launcherState.VERSION, adaptor: 'none' });
+    const proxyPort = parseProxyPort(process.env.PROXY_PORT || PROXY_PORT);
+    launcherState.write(LAUNCHER_STATE, {
+      version: launcherState.VERSION,
+      adaptor: 'none',
+      proxy_port: proxyPort,
+    });
     bootoutLaunchAgent();
     stopListeningPort(proxyPort);
     install();
@@ -330,15 +360,16 @@ function status() {
   codexConfig(['status']);
   console.log('');
   console.log(redactSecrets(readRouteConfig()).trim());
-  const req = http.get(`http://127.0.0.1:${PROXY_PORT}/v1/models`, { timeout: 2000 }, (res) => {
+  const proxyPort = configuredProxyPort();
+  const req = http.get(`http://127.0.0.1:${proxyPort}/v1/models`, { timeout: 2000 }, (res) => {
     res.resume();
-    console.log(`\nproxy=http://127.0.0.1:${PROXY_PORT} status=${res.statusCode}`);
+    console.log(`\nproxy=http://127.0.0.1:${proxyPort} status=${res.statusCode}`);
   });
   req.on('timeout', () => {
     req.destroy();
-    console.log(`\nproxy=http://127.0.0.1:${PROXY_PORT} status=timeout`);
+    console.log(`\nproxy=http://127.0.0.1:${proxyPort} status=timeout`);
   });
-  req.on('error', (e) => console.log(`\nproxy=http://127.0.0.1:${PROXY_PORT} status=unreachable (${e.message})`));
+  req.on('error', (e) => console.log(`\nproxy=http://127.0.0.1:${proxyPort} status=unreachable (${e.message})`));
 }
 
 function probeJson(port, requestPath, timeoutMs = 750) {
@@ -472,7 +503,13 @@ function renderPlist() {
     state = activePreset
       ? launcherState.fromPreset(presets.readPreset(RUNTIME_DIR, activePreset))
       : { version: launcherState.VERSION, adaptor: 'none' };
-    launcherState.write(LAUNCHER_STATE, state);
+    state = launcherState.write(LAUNCHER_STATE, state);
+  }
+  if (process.env.PROXY_PORT !== undefined && parseProxyPort(process.env.PROXY_PORT) !== state.proxy_port) {
+    state = launcherState.write(LAUNCHER_STATE, {
+      ...state,
+      proxy_port: parseProxyPort(process.env.PROXY_PORT),
+    });
   }
   return template
     .replaceAll('__PROGRAM_ARGUMENTS__', launcherState.renderProgramArgumentsXml(
@@ -481,7 +518,7 @@ function renderPlist() {
       path.join(PACKAGE_DIR, 'bin', 'codex-ollama-proxy'),
     ))
     .replaceAll('__LOG__', path.join(RUNTIME_DIR, 'proxy.log'))
-    .replaceAll('__PORT__', PROXY_PORT);
+    .replaceAll('__PORT__', String(state.proxy_port));
 }
 
 function install() {
@@ -501,7 +538,7 @@ function uninstall() {
 }
 
 async function restart() {
-  const proxyPort = parseInt(process.env.PROXY_PORT || PROXY_PORT, 10);
+  const proxyPort = configuredProxyPort();
   bootoutLaunchAgent();
 
   const listeners = listeningPids(proxyPort).filter((pid) => pid !== String(process.pid));
@@ -547,7 +584,8 @@ async function serveCmd(flags = {}) {
     flags = Object.assign({}, flags, { adaptor: preset.adaptor });
   }
   if (!process.env.PROXY_PORT) process.env.PROXY_PORT = PROXY_PORT;
-  const proxyPort = parseInt(process.env.PROXY_PORT || PROXY_PORT, 10);
+  const proxyPort = parseProxyPort(process.env.PROXY_PORT || PROXY_PORT);
+  const runtimeOverrides = launcherRuntimeOverrides(proxyPort);
   if (!await ensureProxyCanStart(flags, proxyPort)) return null;
   // "none" (or no --adaptor) means a direct Responses-API upstream (local
   // Ollama or a hosted Responses endpoint) — no adaptor process is started.
@@ -555,7 +593,11 @@ async function serveCmd(flags = {}) {
     const proxyServer = require('./proxy').startServer();
     await launcherState.writeWhenListening(
       LAUNCHER_STATE,
-      { version: launcherState.VERSION, adaptor: 'none' },
+      launcherState.normalize({
+        version: launcherState.VERSION,
+        adaptor: 'none',
+        ...runtimeOverrides,
+      }),
       [proxyServer],
     );
     return proxyServer;
@@ -575,6 +617,7 @@ async function serveCmd(flags = {}) {
     version: launcherState.VERSION,
     adaptor: 'chat-completion',
     adaptor_port: parseInt(adaptorPort, 10),
+    ...runtimeOverrides,
   };
   if (flags.completionModel) savedLauncherState.completion_model = String(flags.completionModel);
   const adaptor = require('../adaptor/completion-api-adaptor');
@@ -617,7 +660,7 @@ async function serveCmd(flags = {}) {
 
 async function startPresetServer(preset, flags = {}) {
   if (!process.env.PROXY_PORT) process.env.PROXY_PORT = PROXY_PORT;
-  const proxyPort = parseInt(process.env.PROXY_PORT || PROXY_PORT, 10);
+  const proxyPort = parseProxyPort(process.env.PROXY_PORT || PROXY_PORT);
   if (!await ensureProxyCanStart(flags, proxyPort)) return null;
 
   fs.mkdirSync(RUNTIME_DIR, { recursive: true });

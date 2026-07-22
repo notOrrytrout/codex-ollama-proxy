@@ -280,6 +280,9 @@ test('CLI serve --adaptor chat-completion starts proxy plus adaptor using upstre
     'chat-completion',
     '--adaptor-port',
     String(adaptorPort),
+    '--no-dedupe-large-input',
+    '--dedupe-min-chars',
+    '777',
   ], {
     cwd: path.join(__dirname, '..'),
     env: Object.assign({}, process.env, {
@@ -327,7 +330,14 @@ test('CLI serve --adaptor chat-completion starts proxy plus adaptor using upstre
     assert.equal(received[1].body.messages[0].content[1].type, 'image_url');
     assert.deepEqual(
       JSON.parse(fs.readFileSync(path.join(runtimeDir, 'launcher-state.json'), 'utf8')),
-      { version: 1, adaptor: 'chat-completion', adaptor_port: adaptorPort },
+      {
+        version: 1,
+        adaptor: 'chat-completion',
+        proxy_port: proxyPort,
+        adaptor_port: adaptorPort,
+        dedupe_large_input: false,
+        dedupe_min_chars: 777,
+      },
     );
   } finally {
     child.kill('SIGTERM');

@@ -5,8 +5,17 @@ const path = require('path');
 const crypto = require('crypto');
 
 const VERSION = 1;
+const DEFAULT_PROXY_PORT = 11436;
 const DEFAULT_ADAPTOR_PORT = 8787;
-const ALLOWED_KEYS = new Set(['version', 'adaptor', 'adaptor_port', 'completion_model']);
+const ALLOWED_KEYS = new Set([
+  'version',
+  'adaptor',
+  'proxy_port',
+  'adaptor_port',
+  'completion_model',
+  'dedupe_large_input',
+  'dedupe_min_chars',
+]);
 
 function normalize(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
@@ -20,7 +29,12 @@ function normalize(input) {
     throw new Error(`unsupported adaptor "${input.adaptor}" in launcher state`);
   }
 
-  const state = { version: VERSION, adaptor: input.adaptor };
+  const proxyPort = input.proxy_port === undefined ? DEFAULT_PROXY_PORT : Number(input.proxy_port);
+  if (!Number.isInteger(proxyPort) || proxyPort < 1 || proxyPort > 65535) {
+    throw new Error('launcher state proxy_port must be an integer from 1 to 65535');
+  }
+
+  const state = { version: VERSION, adaptor: input.adaptor, proxy_port: proxyPort };
   if (state.adaptor === 'chat-completion') {
     const port = input.adaptor_port === undefined ? DEFAULT_ADAPTOR_PORT : Number(input.adaptor_port);
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -33,6 +47,19 @@ function normalize(input) {
       }
       state.completion_model = input.completion_model;
     }
+  }
+  if (input.dedupe_large_input !== undefined) {
+    if (typeof input.dedupe_large_input !== 'boolean') {
+      throw new Error('launcher state dedupe_large_input must be a boolean');
+    }
+    state.dedupe_large_input = input.dedupe_large_input;
+  }
+  if (input.dedupe_min_chars !== undefined) {
+    const minimum = Number(input.dedupe_min_chars);
+    if (!Number.isInteger(minimum) || minimum < 0) {
+      throw new Error('launcher state dedupe_min_chars must be a non-negative integer');
+    }
+    state.dedupe_min_chars = minimum;
   }
   return state;
 }
@@ -69,13 +96,17 @@ function serveArgs(input) {
     args.push('--adaptor', state.adaptor, '--adaptor-port', String(state.adaptor_port));
     if (state.completion_model) args.push('--completion-model', state.completion_model);
   }
+  if (state.dedupe_large_input === true) args.push('--dedupe-large-input');
+  if (state.dedupe_large_input === false) args.push('--no-dedupe-large-input');
+  if (state.dedupe_min_chars !== undefined) args.push('--dedupe-min-chars', String(state.dedupe_min_chars));
   return args;
 }
 
-function fromPreset(preset) {
+function fromPreset(preset, overrides = {}) {
   return normalize({
     version: VERSION,
     adaptor: preset && preset.adaptor === 'chat-completion' ? 'chat-completion' : 'none',
+    ...overrides,
   });
 }
 
@@ -142,6 +173,7 @@ function writeWhenListening(file, input, servers) {
 
 module.exports = {
   DEFAULT_ADAPTOR_PORT,
+  DEFAULT_PROXY_PORT,
   VERSION,
   fromPreset,
   normalize,

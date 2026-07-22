@@ -13,24 +13,34 @@ test('normalizes direct and chat-completion launcher state', () => {
   assert.deepEqual(launcherState.normalize({ version: 1, adaptor: 'none' }), {
     version: 1,
     adaptor: 'none',
+    proxy_port: 11436,
   });
   assert.deepEqual(launcherState.normalize({
     version: 1,
     adaptor: 'chat-completion',
+    proxy_port: '9122',
     adaptor_port: '9123',
     completion_model: 'provider/model',
+    dedupe_large_input: false,
+    dedupe_min_chars: '0',
   }), {
     version: 1,
     adaptor: 'chat-completion',
+    proxy_port: 9122,
     adaptor_port: 9123,
     completion_model: 'provider/model',
+    dedupe_large_input: false,
+    dedupe_min_chars: 0,
   });
 });
 
 test('rejects invalid, unknown, and secret launcher-state fields', () => {
   assert.throws(() => launcherState.normalize({ version: 1, adaptor: 'other' }), /unsupported adaptor/u);
   assert.throws(() => launcherState.normalize({ version: 1, adaptor: 'none', upstream_api_key: 'secret' }), /unknown launcher state key/u);
+  assert.throws(() => launcherState.normalize({ version: 1, adaptor: 'none', proxy_port: 70000 }), /proxy_port/u);
   assert.throws(() => launcherState.normalize({ version: 1, adaptor: 'chat-completion', adaptor_port: 70000 }), /adaptor_port/u);
+  assert.throws(() => launcherState.normalize({ version: 1, adaptor: 'none', dedupe_large_input: 'false' }), /dedupe_large_input/u);
+  assert.throws(() => launcherState.normalize({ version: 1, adaptor: 'none', dedupe_min_chars: -1 }), /dedupe_min_chars/u);
 });
 
 test('writes launcher state atomically with private permissions and reads it back', () => {
@@ -46,6 +56,7 @@ test('writes launcher state atomically with private permissions and reads it bac
     assert.deepEqual(launcherState.read(file), {
       version: 1,
       adaptor: 'chat-completion',
+      proxy_port: 11436,
       adaptor_port: 8787,
       completion_model: 'override-model',
     });
@@ -69,16 +80,28 @@ test('renders only non-secret serve arguments needed to restore the launcher', (
     '--adaptor-port', '9123',
     '--completion-model', 'provider/model',
   ]);
+  assert.deepEqual(launcherState.serveArgs({
+    version: 1,
+    adaptor: 'none',
+    dedupe_large_input: false,
+    dedupe_min_chars: 777,
+  }), [
+    'serve',
+    '--no-dedupe-large-input',
+    '--dedupe-min-chars', '777',
+  ]);
 });
 
 test('derives migration state from an active preset without copying route values', () => {
   assert.deepEqual(launcherState.fromPreset({ adaptor: 'none', values: { upstream_api_key: 'secret' } }), {
     version: 1,
     adaptor: 'none',
+    proxy_port: 11436,
   });
   assert.deepEqual(launcherState.fromPreset({ adaptor: 'chat-completion', values: { text_model: 'text', upstream_api_key: 'secret' } }), {
     version: 1,
     adaptor: 'chat-completion',
+    proxy_port: 11436,
     adaptor_port: 8787,
   });
 });
